@@ -495,6 +495,7 @@ const NAV_ADMIN=[
   {id:"ai-routing",icon:"🧠",label:"AI Routing Monitor"},
   {id:"oms-registry",icon:"🏭",label:"OMS Registry"},
   {id:"schema-bridge",icon:"🔗",label:"AI Schema Bridge"},
+  {id:"token-mgmt",icon:"🔐",label:"Token Management"},
   {id:"churn",icon:"📉",label:"Churn Signals"},
   {id:"intent",icon:"🎯",label:"Intent Monitor"},
   {id:"support",icon:"🛡️",label:"AI Support Agent"},
@@ -505,6 +506,7 @@ const NAV_B2B=[
   {id:"orders",icon:"📋",label:"My Orders"},
   {id:"track",icon:"📍",label:"Order Tracking"},
   {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+  {id:"my-token",icon:"🔑",label:"My API Token"},
 ];
 const NAV_DEALER=[
   {id:"dashboard",icon:"⚡",label:"Dashboard"},
@@ -512,12 +514,14 @@ const NAV_DEALER=[
   {id:"replenishment",icon:"📋",label:"Replenishment Orders"},
   {id:"track",icon:"📍",label:"Order Tracking"},
   {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+  {id:"my-token",icon:"🔑",label:"My API Token"},
 ];
 const NAV_B2P=[
   {id:"dashboard",icon:"⚡",label:"Dashboard"},
   {id:"catalog-sync",icon:"🔄",label:"Catalog Sync"},
   {id:"marketplace-orders",icon:"📋",label:"Marketplace Orders"},
   {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+  {id:"my-token",icon:"🔑",label:"My API Token"},
 ];
 
 function getNav(role){
@@ -1868,155 +1872,460 @@ function OMSRegistry(){
   );
 }
 
-// ── API SERVICE SETUP (B2B Buyer / Dealer) ──────────────────
+// ── API SERVICE SETUP (B2B Buyer / Dealer / B2P) ────────────
 function APIServiceSetup({role,customerId}){
   const cust=INIT_CUSTOMERS.find(c=>c.id===customerId)||INIT_CUSTOMERS[0];
   const myCatalog=getCustomerCatalog(customerId);
-  const [step,setStep]=useState(1);
   const [schema,setSchema]=useState("");
-  const [bridging,setBridging]=useState(false);
-  const [bridged,setBridged]=useState(false);
-  const [apiKey]=useState("btk-"+Math.random().toString(36).slice(2,18));
+  const [detectedAuth,setDetectedAuth]=useState(null);
   const isDealer=role==="Dealer";
 
-  async function runBridge(){
-    setBridging(true);
-    await new Promise(r=>setTimeout(r,3200));
-    setBridging(false);setBridged(true);setStep(3);
+  // Check if this customer already has a portal request
+  const existingReq=()=>(window.__PORTAL_REQUESTS||[]).find(r=>r.customerId===customerId);
+  const [myRequest,setMyRequest]=useState(existingReq);
+  // Poll for status change (admin may bridge while vendor is watching)
+  const [_tick,setTick]=useState(0);
+  useEffect(()=>{
+    let lastVer=window.__BT_BRIDGE_VERSION||0;
+    const t=setInterval(()=>{
+      const curVer=window.__BT_BRIDGE_VERSION||0;
+      const req=existingReq();
+      if(curVer!==lastVer||JSON.stringify(req)!==JSON.stringify(myRequest)){
+        lastVer=curVer;
+        setMyRequest(req?{...req}:null);
+        setTick(v=>v+1);
+      }
+    },1500);
+    return()=>clearInterval(t);
+  },[customerId]);
+
+  const step = !myRequest ? 1 : myRequest.bridgeStatus==="bridged" ? 3 : 2;
+  const [_localKey]=useState("btk-"+Math.random().toString(36).slice(2,18));
+  const apiKey=myRequest?.apiKey||_localKey;
+
+  const SAMPLE_FORMATS=[
+    {label:"Bearer Token (most common)",badge:"Bearer",badgeColor:C.primary,
+     hint:"Paste a cURL or JSON request that uses an Authorization header",
+     sample:`curl -X POST https://api.yourcompany.com/orders \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1..." \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"PO-2026-001","items":["APM-HTR-001"]}'`},
+    {label:"API Key header",badge:"API Key",badgeColor:"#534AB7",
+     hint:"Paste your API spec showing the x-api-key or similar header field",
+     sample:`{
+  "request_headers": {
+    "x-api-key": "your-key-here",
+    "x-tenant-id": "TENANT-001",
+    "Content-Type": "application/json"
+  },
+  "endpoint": "https://api.yourcompany.com/v2/orders"
+}`},
+    {label:"OAuth 2.0 client credentials",badge:"OAuth 2.0",badgeColor:"#D85A30",
+     hint:"Paste your OAuth config showing client_id, secret, and token URL",
+     sample:`{
+  "auth": {
+    "type": "oauth2",
+    "token_url": "https://auth.yourcompany.com/oauth2/token",
+    "client_id": "your-client-id",
+    "client_secret": "your-secret",
+    "grant_type": "client_credentials",
+    "scope": "orders:read orders:write"
+  }
+}`},
+    {label:"Basic auth or API key in body",badge:"Basic / Body",badgeColor:"#BA7517",
+     hint:"Paste a request showing username/password or api_key in the body",
+     sample:`curl -X POST https://api.yourcompany.com/v1/orders \
+  -u "username:password" \
+  -H "Content-Type: application/json" \
+  -d '{"api_key":"ak_live_xxx","order":{"id":"PO-001"}}'`},
+  ];
+
+  const AUTH_SIGNALS={
+    "authorization: bearer":{type:"Bearer Token",color:C.primary,hdr:"Authorization",pfx:"Bearer"},
+    "x-api-key":            {type:"API Key",color:"#534AB7",hdr:"x-api-key",pfx:""},
+    "apikey":               {type:"API Key",color:"#534AB7",hdr:"x-api-key",pfx:""},
+    "oauth2":               {type:"OAuth 2.0",color:"#D85A30",hdr:"Authorization",pfx:"Bearer"},
+    "oauth/token":          {type:"OAuth 2.0",color:"#D85A30",hdr:"Authorization",pfx:"Bearer"},
+    "client_credentials":   {type:"OAuth 2.0",color:"#D85A30",hdr:"Authorization",pfx:"Bearer"},
+    "basic ":               {type:"Basic Auth",color:"#BA7517",hdr:"Authorization",pfx:"Basic"},
+    "-u ":                  {type:"Basic Auth",color:"#BA7517",hdr:"Authorization",pfx:"Basic"},
+    "api_key":              {type:"API Key (body)",color:"#3B6D11",hdr:"body",pfx:""},
+  };
+
+  function detectAuth(text){
+    const lower=text.toLowerCase();
+    for(const [sig,info] of Object.entries(AUTH_SIGNALS)){
+      if(lower.includes(sig)) return info;
+    }
+    return null;
   }
 
-  return(
+  function handleSchemaChange(val){
+    setSchema(val);
+    setDetectedAuth(val.length>30?detectAuth(val):null);
+  }
+
+  function submitRequest(){
+    if(!schema.trim()) return;
+    const auth=detectAuth(schema)||{type:"Unknown",color:C.muted,hdr:"Authorization",pfx:""};
+    const reqId="PR-"+Date.now().toString().slice(-6);
+    const newReq={
+      id:reqId,
+      customerId,
+      name:cust.name,
+      type:cust.type,
+      role,
+      baseUrl:"https://api."+cust.name.toLowerCase().replace(/[^a-z]/g,"")+".com",
+      auth:auth.type,
+      authColor:auth.color,
+      authHeader:auth.hdr,
+      authPrefix:auth.pfx,
+      schema,
+      submittedAt:new Date().toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}),
+      status:"pending",
+      bridgeStatus:"pending",
+      fieldMappings:[],
+    };
+    if(!window.__PORTAL_REQUESTS) window.__PORTAL_REQUESTS=[];
+    // Replace existing request for this customer if any
+    const existIdx=window.__PORTAL_REQUESTS.findIndex(r=>r.customerId===customerId);
+    if(existIdx>=0) window.__PORTAL_REQUESTS[existIdx]=newReq;
+    else window.__PORTAL_REQUESTS.push(newReq);
+    setMyRequest({...newReq});
+  }
+
+  // ── STEP 1: No request yet ──────────────────────────────
+  if(step===1) return(
     <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
       <div style={{marginBottom:18}}>
         <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>API Service Setup</h2>
-        <p style={{fontSize:12.5,color:C.muted}}>Connect your {role==="B2B Buyer"?"ERP or procurement system":"store management system"} to BridgeTech Universal API · 3 steps</p>
+        <p style={{fontSize:12.5,color:C.muted}}>Connect your {isDealer?"store management system":"ERP or procurement system"} to BridgeTech Universal API</p>
       </div>
 
-      {/* Progress */}
+      {/* Progress bar */}
       <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24}}>
-        {[{n:1,l:"Upload schema"},{n:2,l:"AI maps fields"},{n:3,l:"Go live"}].map((s,i)=>(
+        {[{n:1,l:"Submit your schema"},{n:2,l:"Admin bridges"},{n:3,l:"Go live"}].map((s,i)=>(
           <div key={s.n} style={{display:"flex",alignItems:"center",flex:i<2?1:"auto"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div style={{width:28,height:28,borderRadius:"50%",
-                background:step>=s.n?C.primary:C.border,color:step>=s.n?"#fff":C.muted,
+                background:s.n===1?C.primary:C.border,color:s.n===1?"#fff":C.muted,
                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{s.n}</div>
-              <span style={{fontSize:12.5,fontWeight:step===s.n?700:400,color:step>=s.n?C.navy:C.muted}}>{s.l}</span>
+              <span style={{fontSize:12.5,fontWeight:s.n===1?700:400,color:s.n===1?C.navy:C.muted}}>{s.l}</span>
             </div>
-            {i<2&&<div style={{flex:1,height:2,background:step>s.n?C.primary:C.border,margin:"0 12px"}}/>}
+            {i<2&&<div style={{flex:1,height:2,background:C.border,margin:"0 12px"}}/>}
           </div>
         ))}
       </div>
 
-      {step===1&&(
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
-            <div style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:14}}>Step 1 — Upload your API schema</div>
-            <p style={{fontSize:12.5,color:C.muted,lineHeight:1.6,marginBottom:14}}>
-              Paste a sample JSON request body from your {isDealer?"inventory/order system":"ERP or procurement portal"}.
-              Our AI agent will parse every field, data type, and structure automatically.
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {/* LEFT: paste box */}
+        <div>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px",marginBottom:14}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:6}}>Paste your API schema or sample request</div>
+            <p style={{fontSize:12.5,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+              Paste any format — cURL, JSON config, OAuth snippet, or raw HTTP. The AI analyzer auto-detects your auth pattern and extracts all fields. Your schema is sent to the BridgeTech admin team who will configure the bridge and activate your service.
             </p>
-            <textarea value={schema} onChange={e=>setSchema(e.target.value)}
-              placeholder='{ "order_id": "string", "items": [...], "delivery": {...} }' 
-              rows={10}
-              style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 14px",
-                fontSize:12,fontFamily:"IBM Plex Mono",color:C.text,resize:"vertical",outline:"none",marginBottom:12}}/>
-            <button onClick={()=>schema.trim()&&setStep(2)}
+            <textarea value={schema} onChange={e=>handleSchemaChange(e.target.value)} rows={10}
+              style={{width:"100%",border:`1px solid ${detectedAuth?C.success:C.border}`,borderRadius:9,
+                padding:"11px 14px",fontSize:12,fontFamily:"IBM Plex Mono",color:C.text,
+                resize:"vertical",outline:"none",marginBottom:8,transition:"border-color .2s"}}
+              placeholder="Paste here — cURL, JSON schema, OAuth config, or HTTP request sample"/>
+            {detectedAuth&&(
+              <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+                background:`${detectedAuth.color}10`,borderRadius:8,border:`1px solid ${detectedAuth.color}30`,marginBottom:8}}>
+                <span style={{width:8,height:8,borderRadius:"50%",background:detectedAuth.color,display:"inline-block"}}/>
+                <span style={{fontSize:12,fontWeight:700,color:detectedAuth.color}}>Auth detected: {detectedAuth.type}</span>
+                <span style={{fontSize:11.5,color:C.muted}}>· Header: {detectedAuth.hdr}{detectedAuth.pfx?" · Prefix: "+detectedAuth.pfx:""}</span>
+              </div>
+            )}
+            <button onClick={submitRequest} disabled={!schema.trim()}
               style={{width:"100%",padding:"10px",borderRadius:9,border:"none",
-                background:schema.trim()?C.primary:C.muted,color:"#fff",fontSize:13,fontWeight:700,cursor:schema.trim()?"pointer":"default"}}>
-              Analyse Schema →
+                background:schema.trim()?C.primary:C.muted,color:"#fff",
+                fontSize:13,fontWeight:700,cursor:schema.trim()?"pointer":"default"}}>
+              Submit to BridgeTech →
             </button>
           </div>
-          <div style={{background:`linear-gradient(135deg,${C.primaryDim},${C.accentDim})`,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>BridgeTech Universal API endpoints</div>
-            {[
-              {method:"GET",path:"/api/catalog",desc:`Returns ${myCatalog.length} SKUs filtered for ${cust.name}`,badge:"catalog"},
-              {method:"POST",path:"/api/order",desc:"Submit an order · AI routes to correct OMS system",badge:"order"},
-              {method:"GET",path:"/api/track/{id}",desc:"Real-time order status from OMS system",badge:"track"},
-            ].map((ep,i)=>(
-              <div key={i} style={{padding:"10px 12px",background:C.surface,borderRadius:9,marginBottom:9}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                  <span style={{padding:"2px 7px",borderRadius:6,background:ep.method==="GET"?C.blueDim:C.accentDim,
-                    color:ep.method==="GET"?C.blue:C.accent,fontSize:10.5,fontWeight:700}}>{ep.method}</span>
-                  <code style={{fontSize:12,fontFamily:"IBM Plex Mono",color:C.navy}}>{ep.path}</code>
+
+          {/* Sample formats */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:3}}>Accepted formats</div>
+            <p style={{fontSize:11.5,color:C.muted,marginBottom:14,lineHeight:1.5}}>Paste any of these — AI reads them all and extracts auth automatically.</p>
+            {SAMPLE_FORMATS.map((fmt,i)=>(
+              <div key={i} style={{marginBottom:14,paddingBottom:14,borderBottom:i<3?`1px solid ${C.bg}`:"none"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                  <span style={{padding:"2px 9px",borderRadius:10,background:`${fmt.badgeColor}15`,
+                    color:fmt.badgeColor,fontSize:10.5,fontWeight:700}}>{fmt.badge}</span>
+                  <span style={{fontSize:12.5,fontWeight:600,color:C.navy}}>{fmt.label}</span>
                 </div>
-                <div style={{fontSize:11,color:C.muted}}>{ep.desc}</div>
-              </div>
-            ))}
-            <div style={{marginTop:10,padding:"9px 12px",background:C.surface,borderRadius:9}}>
-              <div style={{fontSize:10.5,color:C.muted,marginBottom:2}}>Base URL</div>
-              <code style={{fontSize:12,fontFamily:"IBM Plex Mono",color:C.primary}}>https://api.bridgetech-hub.io</code>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {step===2&&(
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"24px 28px"}}>
-          <div style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:12}}>Step 2 — AI Schema Bridge agent</div>
-          {!bridging&&!bridged&&(
-            <>
-              <div style={{padding:"12px 16px",background:C.accentDim,borderRadius:10,marginBottom:16,fontSize:12.5,color:C.navy,lineHeight:1.6}}>
-                Schema received and parsed. The AI agent will now cross-reference your fields against BridgeTech's target schema, identify mismatches, and generate transformation rules automatically. No development needed on your side.
-              </div>
-              <button onClick={runBridge}
-                style={{padding:"11px 28px",borderRadius:10,border:"none",background:C.primary,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>
-                🧠 Run AI Bridge Agent →
-              </button>
-            </>
-          )}
-          {bridging&&(
-            <div style={{textAlign:"center",padding:"40px"}}>
-              <div style={{width:48,height:48,borderRadius:"50%",border:`4px solid ${C.border}`,borderTopColor:C.primary,
-                animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
-              <div style={{fontSize:14,fontWeight:600,color:C.navy,marginBottom:6}}>AI agent analysing schema...</div>
-              <div style={{fontSize:12,color:C.muted}}>Detecting field mismatches · Generating transformation rules · Compiling bridge</div>
-            </div>
-          )}
-          {bridged&&(
-            <div style={{textAlign:"center",padding:"20px"}}>
-              <div style={{fontSize:40,marginBottom:12}}>✅</div>
-              <div style={{fontSize:15,fontWeight:700,color:C.success,marginBottom:4}}>Bridge compiled — 12 field mappings ready</div>
-              <button onClick={()=>setStep(3)}
-                style={{marginTop:16,padding:"10px 24px",borderRadius:10,border:"none",background:C.success,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>
-                Activate Service →
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {step===3&&(
-        <div style={{background:C.surface,border:`2px solid ${C.success}50`,borderRadius:12,padding:"28px 32px"}}>
-          <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:22}}>
-            <div style={{width:52,height:52,borderRadius:14,background:`${C.success}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🎉</div>
-            <div>
-              <div style={{fontSize:17,fontWeight:800,color:C.success,marginBottom:3}}>API Service Active — You're Live</div>
-              <div style={{fontSize:12.5,color:C.muted}}>Your {role} integration is production-ready. Use the credentials below.</div>
-            </div>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
-            {[
-              {l:"API Key",v:apiKey,mono:true},
-              {l:"Customer ID",v:cust.id,mono:true},
-              {l:"Base URL",v:"https://api.bridgetech-hub.io",mono:true},
-              {l:"Catalog SKUs",v:myCatalog.length+" SKUs available",mono:false},
-            ].map((f,i)=>(
-              <div key={i} style={{padding:"12px 14px",background:C.bg,borderRadius:9,border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:10.5,color:C.muted,marginBottom:4}}>{f.l}</div>
-                <div style={{fontSize:12,fontWeight:600,color:C.navy,fontFamily:f.mono?"IBM Plex Mono":undefined,wordBreak:"break-all"}}>{f.v}</div>
+                <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:5}}>{fmt.hint}</div>
+                <pre style={{margin:0,background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:8,
+                  padding:"9px 12px",fontFamily:"IBM Plex Mono",fontSize:10.5,color:"#9BAABB",
+                  lineHeight:1.65,overflowX:"auto",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{fmt.sample}</pre>
+                <button onClick={()=>handleSchemaChange(fmt.sample)}
+                  style={{marginTop:5,padding:"3px 11px",borderRadius:6,border:`1px solid ${fmt.badgeColor}30`,
+                    background:`${fmt.badgeColor}08`,color:fmt.badgeColor,fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                  Use this sample
+                </button>
               </div>
             ))}
           </div>
-          <div style={{background:C.navy,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",marginBottom:8}}>Example — fetch your catalog</div>
-            <pre style={{margin:0,fontSize:11.5,fontFamily:"IBM Plex Mono",color:C.accent,lineHeight:1.7}}>{`GET https://api.bridgetech-hub.io/api/catalog
-Authorization: Bearer ${apiKey}
+        </div>
+
+        {/* RIGHT: endpoint preview */}
+        <div style={{background:`linear-gradient(135deg,${C.primaryDim},${C.accentDim})`,
+          border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:4}}>After bridging — your 3 endpoints</div>
+          <p style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:14}}>
+            Once the admin confirms your bridge, you get these 3 endpoints. Your requests stay in YOUR schema format — the AI bridge translates automatically.
+          </p>
+          {[
+            {method:"GET",path:"/api/catalog",badge:C.blue,
+             desc:`Returns ${myCatalog.length} SKUs filtered for ${cust.name}`,
+             sample:`GET https://api.bridgetech-hub.io/api/catalog
+Authorization: Bearer {your_api_key}
 X-Customer-ID: ${cust.id}
-
-// Returns ${myCatalog.length} SKUs in your configured schema`}</pre>
+// Returns YOUR field names — not ours`},
+            {method:"POST",path:"/api/order",badge:C.accent,
+             desc:"Body in YOUR schema — bridge normalises",
+             sample:`POST https://api.bridgetech-hub.io/api/order
+Authorization: Bearer {your_api_key}
+X-Customer-ID: ${cust.id}
+// Body: your existing order format`},
+            {method:"GET",path:"/api/track/{id}",badge:C.success,
+             desc:"Live OMS status in your format",
+             sample:`GET https://api.bridgetech-hub.io/api/track/ORD-8821
+Authorization: Bearer {your_api_key}
+X-Customer-ID: ${cust.id}`},
+          ].map((ep,i)=>(
+            <div key={i} style={{padding:"11px 13px",background:C.surface,borderRadius:9,marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                <span style={{padding:"2px 7px",borderRadius:6,background:`${ep.badge}18`,
+                  color:ep.badge,fontSize:10.5,fontWeight:700}}>{ep.method}</span>
+                <code style={{fontSize:12.5,fontFamily:"IBM Plex Mono",color:C.navy,fontWeight:600}}>{ep.path}</code>
+              </div>
+              <div style={{fontSize:11.5,color:C.muted,marginBottom:6}}>{ep.desc}</div>
+              <pre style={{margin:0,background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:7,
+                padding:"8px 11px",fontFamily:"IBM Plex Mono",fontSize:10,color:"#9BAABB",
+                lineHeight:1.65,overflowX:"auto",whiteSpace:"pre-wrap"}}>{ep.sample}</pre>
+            </div>
+          ))}
+          <div style={{marginTop:10,padding:"10px 12px",background:C.surface,borderRadius:9}}>
+            <div style={{fontSize:11.5,fontWeight:600,color:C.navy,marginBottom:4}}>Security — always use these headers</div>
+            {["Never put your token in the URL — always use Authorization header",
+              "Include X-Customer-ID on every request — filters your catalog",
+              "Rotate your API key every 90 days via POST /auth/refresh"].map((s,i)=>(
+              <div key={i} style={{fontSize:11,color:C.muted,marginBottom:3}}>· {s}</div>
+            ))}
           </div>
         </div>
-      )}
+      </div>
+    </div>
+  );
+
+  // ── STEP 2: Submitted, waiting for admin ────────────────
+  if(step===2) return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:18}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>API Service Setup</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Your schema is with the BridgeTech admin team for bridging</p>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24}}>
+        {[{n:1,l:"Submit your schema",done:true},{n:2,l:"Admin bridges",active:true},{n:3,l:"Go live"}].map((s,i)=>(
+          <div key={s.n} style={{display:"flex",alignItems:"center",flex:i<2?1:"auto"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:28,height:28,borderRadius:"50%",
+                background:s.done?C.success:s.active?C.primary:C.border,
+                color:(s.done||s.active)?"#fff":C.muted,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>
+                {s.done?"✓":s.n}
+              </div>
+              <span style={{fontSize:12.5,fontWeight:s.active?700:400,color:s.done||s.active?C.navy:C.muted}}>{s.l}</span>
+            </div>
+            {i<2&&<div style={{flex:1,height:2,background:s.done?C.success:C.border,margin:"0 12px"}}/>}
+          </div>
+        ))}
+      </div>
+
+      {/* Status card */}
+      <div style={{background:C.surface,border:`2px solid ${C.warn}40`,borderRadius:14,padding:"28px 32px",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
+          <div style={{width:48,height:48,borderRadius:12,background:`${C.warn}18`,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:26}}>⏳</div>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:C.navy,marginBottom:3}}>Schema submitted — awaiting admin review</div>
+            <div style={{fontSize:12.5,color:C.muted}}>Submitted {myRequest?.submittedAt} · Request ID: {myRequest?.id}</div>
+          </div>
+          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:6,
+            padding:"6px 14px",background:`${C.warn}15`,borderRadius:8}}>
+            <span style={{width:8,height:8,borderRadius:"50%",background:C.warn,
+              animation:"pulse 1.5s ease-in-out infinite",display:"inline-block"}}/>
+            <span style={{fontSize:12,fontWeight:700,color:C.warn}}>Pending bridge</span>
+          </div>
+        </div>
+
+        {/* What was submitted */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:600,textTransform:"uppercase"}}>Submitted schema</div>
+            <pre style={{margin:0,background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:9,
+              padding:"12px 14px",fontFamily:"IBM Plex Mono",fontSize:10.5,color:"#7A8BA0",
+              lineHeight:1.65,overflowX:"auto",whiteSpace:"pre-wrap",wordBreak:"break-all",
+              maxHeight:220,overflow:"auto"}}>{myRequest?.schema}</pre>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:600,textTransform:"uppercase"}}>Detected by AI analyzer</div>
+            {myRequest?.auth&&(
+              <div style={{padding:"10px 14px",background:`${myRequest.authColor||C.primary}08`,
+                borderRadius:9,border:`1px solid ${myRequest.authColor||C.primary}25`,marginBottom:10}}>
+                <div style={{fontSize:10.5,color:myRequest.authColor||C.primary,fontWeight:700,marginBottom:6}}>AUTH PATTERN</div>
+                {[["Auth type",myRequest.auth],["Header name",myRequest.authHeader],
+                  ["Token prefix",myRequest.authPrefix||"None"]].map(([k,v])=>(
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:11.5,color:C.muted}}>{k}</span>
+                    <span style={{fontSize:12,fontWeight:700,color:myRequest.authColor||C.primary,fontFamily:"IBM Plex Mono"}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{padding:"12px 14px",background:C.bg,borderRadius:9,border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:11.5,fontWeight:600,color:C.navy,marginBottom:8}}>What happens next</div>
+              {[
+                {icon:"🧠",t:"Admin runs AI Schema Bridge agent",d:"The agent maps your fields to BridgeTech's standard schema"},
+                {icon:"✅",t:"Admin confirms the bridge",d:"Field mappings reviewed and bridge is activated"},
+                {icon:"🎉",t:"You get notified here",d:"This screen updates automatically — no need to refresh"},
+              ].map((s,i)=>(
+                <div key={i} style={{display:"flex",gap:9,marginBottom:8}}>
+                  <span style={{fontSize:15,flexShrink:0}}>{s.icon}</span>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600,color:C.navy}}>{s.t}</div>
+                    <div style={{fontSize:11,color:C.muted}}>{s.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <button onClick={()=>{setMyRequest(null);if(window.__PORTAL_REQUESTS){const i=window.__PORTAL_REQUESTS.findIndex(r=>r.customerId===customerId);if(i>=0)window.__PORTAL_REQUESTS.splice(i,1);}}}
+          style={{padding:"8px 18px",borderRadius:8,border:`1px solid ${C.border}`,
+            background:C.surface,color:C.muted,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          Resubmit with different schema
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── STEP 3: Bridged and live ────────────────────────────
+  const mappings=myRequest?.fieldMappings||[];
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:18}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>API Service Setup</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Your integration is live and production-ready</p>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24}}>
+        {[{n:1,l:"Schema submitted",done:true},{n:2,l:"Admin bridged",done:true},{n:3,l:"Go live",active:true}].map((s,i)=>(
+          <div key={s.n} style={{display:"flex",alignItems:"center",flex:i<2?1:"auto"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:28,height:28,borderRadius:"50%",
+                background:s.done?C.success:C.primary,color:"#fff",
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>
+                {s.done?"✓":s.n}
+              </div>
+              <span style={{fontSize:12.5,fontWeight:700,color:C.navy}}>{s.l}</span>
+            </div>
+            {i<2&&<div style={{flex:1,height:2,background:C.success,margin:"0 12px"}}/>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,border:`2px solid ${C.success}50`,borderRadius:14,padding:"28px 32px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:24}}>
+          <div style={{width:52,height:52,borderRadius:14,background:`${C.success}18`,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🎉</div>
+          <div>
+            <div style={{fontSize:17,fontWeight:800,color:C.success,marginBottom:3}}>Bridge Active — You're Live</div>
+            <div style={{fontSize:12.5,color:C.muted}}>Bridged by admin · {myRequest?.submittedAt} · Request {myRequest?.id}</div>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+          {/* Credentials */}
+          <div>
+            <div style={{fontSize:12,fontWeight:700,color:C.navy,marginBottom:10}}>Your credentials</div>
+            {[{l:"API Key",v:apiKey,mono:true},{l:"Customer ID",v:cust.id,mono:true},
+              {l:"Base URL",v:"https://api.bridgetech-hub.io",mono:true},
+              {l:"Your auth type",v:myRequest?.auth||"Bearer Token",mono:false}].map((f,i)=>(
+              <div key={i} style={{padding:"10px 12px",background:C.bg,borderRadius:8,marginBottom:8,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:10.5,color:C.muted,marginBottom:3}}>{f.l}</div>
+                <div style={{fontSize:12.5,fontWeight:600,color:C.navy,fontFamily:f.mono?"IBM Plex Mono":undefined,wordBreak:"break-all"}}>{f.v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Field mappings from bridge */}
+          <div>
+            <div style={{fontSize:12,fontWeight:700,color:C.navy,marginBottom:10}}>
+              AI field mappings confirmed by admin
+              <span style={{marginLeft:8,fontSize:10.5,fontWeight:500,color:C.muted}}>({mappings.length>0?mappings.length:"14"} rules)</span>
+            </div>
+            <div style={{background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:9,
+              padding:"10px 12px",maxHeight:180,overflowY:"auto"}}>
+              {mappings.length>0?mappings.map((m,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:11.5}}>
+                  <code style={{color:C.primary,fontFamily:"IBM Plex Mono",fontSize:10.5}}>{m.source}</code>
+                  <span style={{color:C.muted}}>→</span>
+                  <code style={{color:C.success,fontFamily:"IBM Plex Mono",fontSize:10.5}}>{m.target}</code>
+                  {m.transform&&<span style={{color:C.warn,fontSize:10,marginLeft:4}}>[{m.transform}]</span>}
+                </div>
+              )):[
+                ["order_ref","id"],["buyer_id","customer_id"],["placed_on","created_at","date→ISO8601"],
+                ["order_state","status"],["line_items","items"],["unit_cost","unit_price"],
+                ["ship_to.nation","delivery.country_code","full→ISO2"],
+              ].map(([s,t,tr],i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,fontSize:11.5}}>
+                  <code style={{color:C.primary,fontFamily:"IBM Plex Mono",fontSize:10.5}}>{s}</code>
+                  <span style={{color:C.muted}}>→</span>
+                  <code style={{color:C.success,fontFamily:"IBM Plex Mono",fontSize:10.5}}>{t}</code>
+                  {tr&&<span style={{color:C.warn,fontSize:10,marginLeft:4}}>[{tr}]</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Integration guide with THEIR auth type */}
+        <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Your integration guide</div>
+        {[
+          {title:`1. Authenticate — using your ${myRequest?.auth||"Bearer Token"}`,
+           sample:`${myRequest?.authHeader||"Authorization"}: ${myRequest?.authPrefix?myRequest.authPrefix+" ":""}${apiKey}
+X-Customer-ID: ${cust.id}
+Content-Type: application/json`},
+          {title:"2. Browse your catalog",
+           sample:`GET https://api.bridgetech-hub.io/api/catalog?customer_id=${cust.id}
+// Returns ${myCatalog.length} SKUs in YOUR field name format`},
+          {title:"3. Submit an order — paste YOUR schema format",
+           sample:`POST https://api.bridgetech-hub.io/api/order
+// Send in your original format — AI bridge handles translation
+// Returns: {"order_id":"ORD-xxxx","status":"received","oms":"SAP ERP"}`},
+          {title:"4. Track live order status",
+           sample:`GET https://api.bridgetech-hub.io/api/track/{order_id}
+// Status: received → processing → shipped → delivered`},
+          {title:"5. Rotate your key (every 90 days)",
+           sample:`POST https://api.bridgetech-hub.io/auth/refresh
+${myRequest?.authHeader||"Authorization"}: ${myRequest?.authPrefix?myRequest.authPrefix+" ":""}${apiKey}`},
+        ].map((g,i)=>(
+          <div key={i} style={{background:C.bg,borderRadius:10,overflow:"hidden",marginBottom:10}}>
+            <div style={{padding:"8px 14px",background:C.primaryDim,fontSize:12.5,fontWeight:700,color:C.navy}}>{g.title}</div>
+            <pre style={{margin:0,padding:"10px 14px",fontFamily:"IBM Plex Mono",fontSize:11,
+              color:"#7A8BA0",lineHeight:1.65,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{g.sample}</pre>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2690,6 +2999,18 @@ function SchemaBridge(){
 
   // Refresh from global store every time we select
   function refreshRequests(){ setRequests([...(window.__PORTAL_REQUESTS||[])]); }
+  // Poll for new live submissions every 3 seconds
+  useEffect(()=>{
+    const t=setInterval(()=>{
+      const fresh=window.__PORTAL_REQUESTS||[];
+      setRequests(prev=>{
+        if(JSON.stringify(prev.map(r=>r.id+r.bridgeStatus))!==JSON.stringify(fresh.map(r=>r.id+r.bridgeStatus)))
+          return [...fresh];
+        return prev;
+      });
+    },3000);
+    return()=>clearInterval(t);
+  },[]);
 
   // ── Derive field mappings from submitted schema ─────────────
   function deriveMappings(schema){
@@ -2869,11 +3190,15 @@ Provide bridge recommendation. End with a clear statement on whether this portal
       const idx=window.__PORTAL_REQUESTS.findIndex(r=>r.id===selected.id);
       if(idx>=0){
         window.__PORTAL_REQUESTS[idx]={...window.__PORTAL_REQUESTS[idx],
-          status:"active",bridgeStatus:"mapped"};
+          status:"active",bridgeStatus:"bridged",
+          bridgedAt:new Date().toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}),
+          apiKey:"btk-"+Math.random().toString(36).slice(2,18),
+          fieldMappings:mappings.map(m=>({source:m.source,target:m.target,transform:m.note||""}))};
+        window.__BT_BRIDGE_VERSION=(window.__BT_BRIDGE_VERSION||0)+1;
       }
     }
     setRequests([...(window.__PORTAL_REQUESTS||[])]);
-    setSelected(s=>({...s,status:"active",bridgeStatus:"mapped"}));
+    setSelected(s=>({...s,status:"active",bridgeStatus:"bridged"}));
     setPhase("complete");
   }
 
@@ -2884,8 +3209,8 @@ Provide bridge recommendation. End with a clear statement on whether this portal
     applying:"Applying Changes",verifying:"Re-verifying",complete:"✓ Mapping Complete"};
 
   const pending=requests.filter(r=>r.bridgeStatus==="pending"||!r.bridgeStatus);
-  const bridged=requests.filter(r=>r.bridgeStatus==="mapped");
-  const typeColor={"B2B Buyer":C.accent,Vendor:C.blue,Dealer:C.success,Distributor:C.warn};
+  const bridged=requests.filter(r=>r.bridgeStatus==="bridged"||r.bridgeStatus==="mapped");
+  const typeColor={"B2B Buyer":C.accent,"B2P Portal":"#D85A30",Dealer:C.success,Vendor:C.blue};
 
   return(
     <div style={{padding:"20px 24px",overflowY:"auto",flex:1,background:C.bg,display:"flex",flexDirection:"column",gap:14}}>
@@ -2955,9 +3280,16 @@ Provide bridge recommendation. End with a clear statement on whether this portal
                     <span style={{fontSize:13,fontWeight:700,color:isSel?C.primary:C.navy}}>{r.name}</span>
                     <Badge color={typeColor[r.type]||C.blue}>{r.type}</Badge>
                   </div>
-                  <div style={{fontSize:11,color:C.muted,fontFamily:"IBM Plex Mono",marginBottom:2,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.baseUrl}</div>
-                  <div style={{fontSize:10,color:C.muted}}>{r.submittedAt}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                    {r.customerId&&<span style={{padding:"1px 7px",borderRadius:8,background:`${C.success}15`,
+                      color:C.success,fontSize:9.5,fontWeight:700}}>LIVE SUBMISSION</span>}
+                    <span style={{fontSize:10.5,color:C.muted,fontFamily:"IBM Plex Mono",
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.customerId||r.baseUrl}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontSize:10,color:C.muted}}>{r.submittedAt}</span>
+                    {r.auth&&<span style={{fontSize:10,color:C.primary,fontWeight:600}}>{r.auth}</span>}
+                  </div>
                 </div>
               );
             })}
@@ -3074,9 +3406,17 @@ Provide bridge recommendation. End with a clear statement on whether this portal
                     </div>
                     <div style={{background:"#0F172A",padding:"12px 14px",overflowY:"auto",maxHeight:280}}>
                       {selected.schema&&selected.schema!=="{}"?(
-                        <pre style={{margin:0,fontSize:10,fontFamily:"IBM Plex Mono",color:"#94A3B8",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
-                          {JSON.stringify(JSON.parse(selected.schema),null,2)}
-                        </pre>
+                        <>
+                          {selected.customerId&&(
+                            <div style={{padding:"4px 8px",background:"rgba(34,197,94,0.15)",borderRadius:6,
+                              marginBottom:8,fontSize:10,fontWeight:700,color:"#22C55E"}}>
+                              LIVE — submitted by {selected.name} ({selected.customerId})
+                            </div>
+                          )}
+                          <pre style={{margin:0,fontSize:10,fontFamily:"IBM Plex Mono",color:"#94A3B8",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                            {(()=>{try{return JSON.stringify(JSON.parse(selected.schema),null,2);}catch{return selected.schema;}})()}
+                          </pre>
+                        </>
                       ):(
                         <div style={{color:"rgba(255,255,255,0.3)",fontSize:12,padding:"20px 0",textAlign:"center"}}>
                           No schema provided<br/>
@@ -3292,6 +3632,339 @@ Provide bridge recommendation. End with a clear statement on whether this portal
   );
 }
 
+
+// ── TOKEN MANAGEMENT (Admin) ────────────────────────────────
+function TokenManagement(){
+  const [vendors,setVendors]=useState(()=>(window.__PORTAL_REQUESTS||[]).filter(r=>r.bridgeStatus==="bridged"));
+  const [rotating,setRotating]=useState({});
+  const [revoking,setRevoking]=useState({});
+  const [search,setSearch]=useState("");
+  const [tick,setTick]=useState(0);
+
+  useEffect(()=>{
+    const t=setInterval(()=>{
+      setVendors([...(window.__PORTAL_REQUESTS||[]).filter(r=>r.bridgeStatus==="bridged")]);
+      setTick(v=>v+1);
+    },2000);
+    return()=>clearInterval(t);
+  },[]);
+
+  async function rotateToken(req){
+    setRotating(r=>({...r,[req.id]:true}));
+    await new Promise(r=>setTimeout(r,1800));
+    const newKey="btk-"+Math.random().toString(36).slice(2,18);
+    const idx=(window.__PORTAL_REQUESTS||[]).findIndex(r=>r.id===req.id);
+    if(idx>=0){
+      window.__PORTAL_REQUESTS[idx]={...window.__PORTAL_REQUESTS[idx],
+        apiKey:newKey,
+        lastRotated:new Date().toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}),
+        rotationCount:(window.__PORTAL_REQUESTS[idx].rotationCount||0)+1};
+      window.__BT_BRIDGE_VERSION=(window.__BT_BRIDGE_VERSION||0)+1;
+    }
+    setVendors([...(window.__PORTAL_REQUESTS||[]).filter(r=>r.bridgeStatus==="bridged")]);
+    setRotating(r=>({...r,[req.id]:false}));
+  }
+
+  async function revokeToken(req){
+    if(!window.confirm("Revoke token for "+req.name+"? They will lose API access immediately.")) return;
+    setRevoking(r=>({...r,[req.id]:true}));
+    await new Promise(r=>setTimeout(r,1200));
+    const idx=(window.__PORTAL_REQUESTS||[]).findIndex(r=>r.id===req.id);
+    if(idx>=0){
+      window.__PORTAL_REQUESTS[idx]={...window.__PORTAL_REQUESTS[idx],
+        apiKey:null,bridgeStatus:"revoked",status:"revoked",
+        revokedAt:new Date().toLocaleTimeString()};
+      window.__BT_BRIDGE_VERSION=(window.__BT_BRIDGE_VERSION||0)+1;
+    }
+    setVendors([...(window.__PORTAL_REQUESTS||[]).filter(r=>r.bridgeStatus==="bridged")]);
+    setRevoking(r=>({...r,[req.id]:false}));
+  }
+
+  const filtered=vendors.filter(v=>!search||v.name.toLowerCase().includes(search.toLowerCase())||v.customerId?.includes(search));
+  const totalActive=vendors.length;
+  const expiringSoon=vendors.filter(v=>(v.rotationCount||0)===0).length;
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>🔐 Token Management</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Manage API keys for all bridged vendors · Rotate · Revoke · Monitor</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search vendor or customer ID..."
+            style={{border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 12px",fontSize:12.5,
+              outline:"none",background:C.surface,color:C.text,width:240}}/>
+        </div>
+      </div>
+
+      {/* Summary KPIs */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+        {[
+          {l:"Active tokens",v:totalActive,c:C.success,icon:"🔑"},
+          {l:"Never rotated",v:expiringSoon,c:C.warn,icon:"⏰"},
+          {l:"Rotation policy",v:"90 days",c:C.primary,icon:"🔄"},
+          {l:"Last action",v:vendors.length>0?"Today":"—",c:C.muted,icon:"📋"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:11,
+            padding:"12px 16px",borderTop:`3px solid ${s.c}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase"}}>{s.l}</span>
+              <span style={{fontSize:14}}>{s.icon}</span>
+            </div>
+            <div style={{fontSize:20,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Vendor token table */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+        <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between"}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Active vendor tokens</span>
+          <span style={{fontSize:11.5,color:C.muted}}>{filtered.length} vendors</span>
+        </div>
+        {filtered.length===0?(
+          <div style={{padding:40,textAlign:"center",color:C.muted}}>
+            <div style={{fontSize:32,marginBottom:10}}>🔑</div>
+            <div style={{fontSize:13,fontWeight:600,color:C.navy,marginBottom:4}}>No bridged vendors yet</div>
+            <div style={{fontSize:12}}>Bridge a vendor in AI Schema Bridge to manage their token here</div>
+          </div>
+        ):(
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {["Vendor","Type","Customer ID","Auth","API Key","Bridged","Rotations","Actions"].map(h=>(
+                  <th key={h} style={{padding:"8px 14px",textAlign:"left",fontSize:10.5,color:C.muted,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((v,i)=>{
+                const typeColor={"B2B Buyer":C.accent,"Dealer":C.success,"B2P Portal":"#D85A30"};
+                return(
+                  <tr key={i} style={{borderTop:`1px solid ${C.border}`}}>
+                    <td style={{padding:"12px 14px"}}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.navy}}>{v.name}</div>
+                      <div style={{fontSize:10.5,color:C.muted}}>{v.bridgedAt||v.submittedAt}</div>
+                    </td>
+                    <td style={{padding:"12px 14px"}}>
+                      <span style={{padding:"2px 8px",borderRadius:9,
+                        background:`${typeColor[v.type]||C.muted}15`,color:typeColor[v.type]||C.muted,
+                        fontSize:10.5,fontWeight:600}}>{v.type}</span>
+                    </td>
+                    <td style={{padding:"12px 14px",fontFamily:"IBM Plex Mono",fontSize:11.5,color:C.primary}}>
+                      {v.customerId||"—"}
+                    </td>
+                    <td style={{padding:"12px 14px",fontSize:11.5,color:C.muted}}>{v.auth}</td>
+                    <td style={{padding:"12px 14px"}}>
+                      {v.apiKey?(
+                        <code style={{fontSize:10.5,fontFamily:"IBM Plex Mono",color:C.success,
+                          background:`${C.success}10`,padding:"2px 7px",borderRadius:5}}>
+                          {v.apiKey.slice(0,12)}••••••
+                        </code>
+                      ):(
+                        <span style={{fontSize:11,color:C.danger}}>Revoked</span>
+                      )}
+                    </td>
+                    <td style={{padding:"12px 14px",fontSize:11,color:C.muted}}>
+                      {v.lastRotated||"Never rotated"}
+                    </td>
+                    <td style={{padding:"12px 14px",fontFamily:"IBM Plex Mono",fontSize:11.5,
+                      color:(v.rotationCount||0)>0?C.success:C.warn,fontWeight:600}}>
+                      {v.rotationCount||0}×
+                    </td>
+                    <td style={{padding:"12px 14px"}}>
+                      <div style={{display:"flex",gap:6}}>
+                        <button onClick={()=>rotateToken(v)} disabled={rotating[v.id]}
+                          style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.primary}40`,
+                            background:`${C.primary}10`,color:C.primary,fontSize:11.5,fontWeight:600,
+                            cursor:rotating[v.id]?"wait":"pointer"}}>
+                          {rotating[v.id]?"Rotating...":"🔄 Rotate"}
+                        </button>
+                        <button onClick={()=>revokeToken(v)} disabled={revoking[v.id]||!v.apiKey}
+                          style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${C.danger}40`,
+                            background:`${C.danger}10`,color:C.danger,fontSize:11.5,fontWeight:600,
+                            cursor:revoking[v.id]||!v.apiKey?"default":"pointer",
+                            opacity:!v.apiKey?0.4:1}}>
+                          {revoking[v.id]?"Revoking...":"✕ Revoke"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Security policy note */}
+      <div style={{marginTop:14,padding:"14px 18px",background:C.surface,border:`1px solid ${C.border}`,
+        borderRadius:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <div>
+          <div style={{fontSize:12.5,fontWeight:700,color:C.navy,marginBottom:8}}>Token rotation policy</div>
+          {["Rotate every 90 days minimum — use the Rotate button above",
+            "Rotating issues a new key — old key valid for 24h during transition",
+            "Vendor sees their new key automatically in their API Service Setup"].map((s,i)=>(
+            <div key={i} style={{fontSize:11.5,color:C.muted,marginBottom:4}}>· {s}</div>
+          ))}
+        </div>
+        <div>
+          <div style={{fontSize:12.5,fontWeight:700,color:C.navy,marginBottom:8}}>Revocation</div>
+          {["Revoke immediately removes API access — no grace period",
+            "Use for offboarding, security incidents, or contract end",
+            "Vendor sees 'Token revoked' in their setup page immediately"].map((s,i)=>(
+            <div key={i} style={{fontSize:11.5,color:C.muted,marginBottom:4}}>· {s}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TOKEN UPDATE (Channel — B2B/B2P/Dealer) ─────────────────
+function TokenUpdate({customerId}){
+  const [myReq,setMyReq]=useState(()=>(window.__PORTAL_REQUESTS||[]).find(r=>r.customerId===customerId));
+  const [copied,setCopied]=useState(false);
+  const [tick,setTick]=useState(0);
+
+  useEffect(()=>{
+    const t=setInterval(()=>{
+      const fresh=(window.__PORTAL_REQUESTS||[]).find(r=>r.customerId===customerId);
+      setMyReq(fresh?{...fresh}:null);
+      setTick(v=>v+1);
+    },2000);
+    return()=>clearInterval(t);
+  },[customerId]);
+
+  function copyKey(){
+    if(!myReq?.apiKey) return;
+    navigator.clipboard?.writeText(myReq.apiKey).catch(()=>{});
+    setCopied(true);
+    setTimeout(()=>setCopied(false),2500);
+  }
+
+  if(!myReq||myReq.bridgeStatus!=="bridged") return(
+    <div style={{padding:"22px 26px",flex:1,background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center",color:C.muted}}>
+        <div style={{fontSize:36,marginBottom:12}}>🔑</div>
+        <div style={{fontSize:15,fontWeight:700,color:C.navy,marginBottom:6}}>No active API key yet</div>
+        <div style={{fontSize:12.5}}>Complete the API Service Setup first — your token will appear here once the admin bridges your schema</div>
+      </div>
+    </div>
+  );
+
+  const isRevoked=myReq.bridgeStatus==="revoked"||!myReq.apiKey;
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:18}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>🔑 My API Token</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>View and manage your Universal API access token · Last rotated: {myReq.lastRotated||"Not yet rotated"}</p>
+      </div>
+
+      {isRevoked?(
+        <div style={{background:C.surface,border:`2px solid ${C.danger}40`,borderRadius:14,padding:"28px 32px",textAlign:"center"}}>
+          <div style={{fontSize:40,marginBottom:12}}>🚫</div>
+          <div style={{fontSize:17,fontWeight:800,color:C.danger,marginBottom:8}}>Your API token has been revoked</div>
+          <div style={{fontSize:13,color:C.muted}}>Contact your BridgeTech admin to restore access. Request ID: {myReq.id}</div>
+        </div>
+      ):(
+        <>
+          {/* Token display */}
+          <div style={{background:C.surface,border:`2px solid ${C.success}40`,borderRadius:14,padding:"24px 28px",marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+              <div style={{width:44,height:44,borderRadius:12,background:`${C.success}18`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>✅</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:800,color:C.success}}>Token Active</div>
+                <div style={{fontSize:12,color:C.muted}}>Bridged {myReq.bridgedAt||myReq.submittedAt} · {myReq.auth}</div>
+              </div>
+              <div style={{marginLeft:"auto",fontSize:11.5,color:C.muted}}>
+                Rotation count: <strong style={{color:C.navy}}>{myReq.rotationCount||0}×</strong>
+              </div>
+            </div>
+
+            {/* Token value */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,textTransform:"uppercase",marginBottom:6}}>Your API key</div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <code style={{flex:1,background:"#F8FAFC",border:`1px solid ${C.border}`,borderRadius:8,
+                  padding:"10px 14px",fontFamily:"IBM Plex Mono",fontSize:12.5,color:C.navy,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {myReq.apiKey}
+                </code>
+                <button onClick={copyKey}
+                  style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${C.primary}40`,
+                    background:copied?`${C.success}15`:C.primaryDim,color:copied?C.success:C.primary,
+                    fontSize:12.5,fontWeight:600,cursor:"pointer",flexShrink:0,transition:"all .2s"}}>
+                  {copied?"✓ Copied":"Copy"}
+                </button>
+              </div>
+            </div>
+
+            {/* How to use */}
+            <div style={{fontSize:12.5,fontWeight:700,color:C.navy,marginBottom:10}}>How to use your token</div>
+            <div style={{background:"#F8FAFC",borderRadius:9,overflow:"hidden",border:`1px solid ${C.border}`}}>
+              <div style={{padding:"6px 12px",background:C.primaryDim,fontSize:11.5,fontWeight:600,color:C.navy}}>
+                Add to every request
+              </div>
+              <pre style={{margin:0,padding:"12px 14px",fontFamily:"IBM Plex Mono",fontSize:11,
+                color:"#7A8BA0",lineHeight:1.7,whiteSpace:"pre-wrap"}}>
+{`${myReq.authHeader||"Authorization"}: ${myReq.authPrefix?myReq.authPrefix+" ":""}${myReq.apiKey}
+X-Customer-ID: ${customerId}
+Content-Type: application/json`}
+              </pre>
+            </div>
+          </div>
+
+          {/* Security settings */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 22px",marginBottom:14}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:14}}>Security settings</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {[
+                {l:"Customer ID",v:customerId,mono:true},
+                {l:"Auth type",v:myReq.auth,mono:false},
+                {l:"Header name",v:myReq.authHeader||"Authorization",mono:true},
+                {l:"Token prefix",v:myReq.authPrefix||"None",mono:false},
+                {l:"Base URL",v:"https://api.bridgetech-hub.io",mono:true},
+                {l:"Rotation policy",v:"Every 90 days",mono:false},
+              ].map((f,i)=>(
+                <div key={i} style={{padding:"9px 12px",background:C.bg,borderRadius:8,border:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:10,color:C.muted,marginBottom:3}}>{f.l}</div>
+                  <div style={{fontSize:12.5,fontWeight:600,color:C.navy,
+                    fontFamily:f.mono?"IBM Plex Mono":undefined}}>{f.v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Security checklist */}
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 20px"}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Security checklist</div>
+            {[
+              {ok:true,t:"Use Authorization header only",d:"Never include your token in URL parameters — visible in server logs"},
+              {ok:true,t:"Always send X-Customer-ID",d:"Every request must include your customer ID to filter catalog and route orders"},
+              {ok:(myReq.rotationCount||0)>0,t:"Token rotated at least once",d:"Contact your admin to rotate your token if you haven't already"},
+              {ok:false,t:"IP allowlisting",d:"Ask your admin to restrict your key to your server IP ranges for extra security"},
+            ].map((s,i)=>(
+              <div key={i} style={{display:"flex",gap:10,padding:"9px 0",
+                borderBottom:i<3?`1px solid ${C.bg}`:"none"}}>
+                <span style={{fontSize:16,flexShrink:0}}>{s.ok?"✅":"⚠️"}</span>
+                <div>
+                  <div style={{fontSize:12.5,fontWeight:600,color:s.ok?C.navy:C.warn}}>{s.t}</div>
+                  <div style={{fontSize:11.5,color:C.muted}}>{s.d}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── APP SHELL ──────────────────────────────────────────────
 function App(){
   const [role,setRole]=useState(null);
@@ -3325,8 +3998,10 @@ function App(){
       case"oms-registry":   return <OMSRegistry/>;
       case"schema-bridge":  return <SchemaBridge/>;
       case"support":        return <SupportAgent/>;
+      case"token-mgmt":     return <TokenManagement/>;
       case"churn":          return <ChurnAgent/>;
       case"intent":         return <IntentMonitor/>;
+      case"my-token":       return <TokenUpdate customerId={customerId}/>;
       case"api-setup":      return <APIServiceSetup role={role} customerId={customerId}/>;
       case"track":          return <OrderTracking customerId={customerId}/>;
       case"orders":         return <OrderTracking customerId={customerId}/>;
