@@ -1,0 +1,3394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BridgeTech — Manufacturing Orchestration Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#F3F5F8;--surface:#fff;--border:#DDE3ED;
+  --sidebar:#011B32;--sidebar-border:#0D2D4A;
+  --primary:#006784;--primary-dim:rgba(0,103,132,0.09);--primary-hover:#005570;
+  --accent:#00C6B9;--accent-dim:rgba(0,198,185,0.10);
+  --blue:#467FF7;--blue-dim:rgba(70,127,247,0.10);
+  --navy:#1C244B;--navy2:#2A3860;
+  --success:#22C55E;--warn:#F59E0B;--danger:#EF4444;
+  --text:#4A4A4A;--muted:#7A8BA0;
+  --font:'Roboto',sans-serif;--mono:'IBM Plex Mono',monospace;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow:hidden}
+#root{height:100vh;display:flex}
+button{cursor:pointer;font-family:var(--font)}
+input,select,textarea{font-family:var(--font)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeUp{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes dash{to{stroke-dashoffset:-20}}
+.fadeUp{animation:fadeUp .25s ease-out}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+// ── ERROR BOUNDARY ─────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state={hasError:false,error:null}; }
+  static getDerivedStateFromError(e){ return {hasError:true,error:e}; }
+  componentDidCatch(e,info){ console.error("Page error:",e,info); }
+  render(){
+    if(this.state.hasError){
+      return(
+        <div style={{padding:40,textAlign:"center",color:"#4A4A4A"}}>
+          <div style={{fontSize:40,marginBottom:16}}>⚠️</div>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>This module encountered an error</div>
+          <div style={{fontSize:13,color:"#7A8BA0",marginBottom:20}}>{this.state.error?.message||"Unknown error"}</div>
+          <button onClick={()=>this.setState({hasError:false,error:null})}
+            style={{padding:"9px 22px",borderRadius:9,border:"none",background:"#006784",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+            ↺ Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ── BRAND PALETTE ──────────────────────────────────────────
+const C={
+  bg:"#F3F5F8",surface:"#fff",border:"#DDE3ED",
+  sidebar:"#011B32",sidebarBorder:"#0D2D4A",
+  primary:"#006784",primaryDim:"rgba(0,103,132,0.09)",primaryHover:"#005570",
+  accent:"#00C6B9",accentDim:"rgba(0,198,185,0.10)",
+  blue:"#467FF7",blueDim:"rgba(70,127,247,0.10)",
+  navy:"#1C244B",navy2:"#2A3860",
+  success:"#22C55E",warn:"#F59E0B",danger:"#EF4444",
+  text:"#4A4A4A",muted:"#7A8BA0",white:"#fff",
+};
+
+
+// ── RICH MESSAGE RENDERER ──────────────────────────────────
+function RichMessage({text, isUser}){
+  if(isUser) return <span style={{whiteSpace:"pre-wrap"}}>{text}</span>;
+
+  // Parse markdown-like content into React elements
+  function parseInline(str){
+    // bold **text** and *text*
+    const parts=str.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
+    return parts.map((p,i)=>{
+      if(p.startsWith("**")&&p.endsWith("**"))
+        return <strong key={i} style={{fontWeight:700,color:C.navy}}>{p.slice(2,-2)}</strong>;
+      if(p.startsWith("*")&&p.endsWith("*"))
+        return <em key={i} style={{fontStyle:"italic"}}>{p.slice(1,-1)}</em>;
+      if(p.startsWith("`")&&p.endsWith("`"))
+        return <code key={i} style={{fontFamily:"IBM Plex Mono",fontSize:"0.88em",background:"rgba(0,103,132,0.10)",color:C.primary,padding:"1px 5px",borderRadius:4}}>{p.slice(1,-1)}</code>;
+      return p;
+    });
+  }
+
+  function parseTable(rows){
+    // rows is array of pipe-split lines
+    const head=rows[0].split("|").map(c=>c.trim()).filter(Boolean);
+    // row[1] is separator --- skip it
+    const body=rows.slice(2).map(r=>r.split("|").map(c=>c.trim()).filter(Boolean));
+    return(
+      <div style={{overflowX:"auto",marginTop:10,marginBottom:10,borderRadius:10,border:`1px solid ${C.border}`,boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead>
+            <tr style={{background:`linear-gradient(135deg,${C.navy},${C.primary})`}}>
+              {head.map((h,i)=>(
+                <th key={i} style={{padding:"10px 14px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:12,whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row,ri)=>(
+              <tr key={ri} style={{background:ri%2===0?C.surface:"#f7f9fc",borderTop:`1px solid ${C.border}`}}>
+                {row.map((cell,ci)=>(
+                  <td key={ci} style={{padding:"9px 14px",color:C.text,fontSize:13,
+                    fontWeight:ci===0?600:400,
+                    color:ci===0?C.navy:C.text,
+                    fontFamily:cell.match(/^\$[\d,.]|^\d+[\d,.]*$/)?"IBM Plex Mono":undefined,
+                    color:cell.startsWith("$")||cell.match(/^[\d,.]+$/)? C.primary:ci===0?C.navy:C.text
+                  }}>{parseInline(cell)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  const lines=text.split("\n");
+  const elements=[];
+  let i=0;
+  while(i<lines.length){
+    const line=lines[i];
+
+    // Blank line
+    if(line.trim()===""){i++;continue;}
+
+    // H1 / H2 / H3
+    const hm=line.match(/^(#{1,3})\s+(.+)/);
+    if(hm){
+      const lvl=hm[1].length;
+      const sizes=[20,17,15];
+      elements.push(
+        <div key={i} style={{fontWeight:700,fontSize:sizes[lvl-1]||14,color:C.navy,marginTop:lvl===1?14:10,marginBottom:4,
+          borderBottom:lvl===1?`2px solid ${C.accent}`:lvl===2?`1px solid ${C.border}`:"none",paddingBottom:lvl<3?5:0}}>
+          {parseInline(hm[2])}
+        </div>
+      );
+      i++;continue;
+    }
+
+    // Horizontal rule
+    if(line.match(/^[-*_]{3,}$/)){
+      elements.push(<hr key={i} style={{border:"none",borderTop:`1px solid ${C.border}`,margin:"10px 0"}}/>);
+      i++;continue;
+    }
+
+    // Detect table: line starts with | and next line is separator
+    if(line.trim().startsWith("|")&&lines[i+1]&&lines[i+1].match(/^\|?[\s\-|:]+\|?$/)){
+      const tableRows=[];
+      while(i<lines.length&&lines[i].trim().startsWith("|")){
+        tableRows.push(lines[i]);i++;
+      }
+      elements.push(<div key={`t${i}`}>{parseTable(tableRows)}</div>);
+      continue;
+    }
+
+    // Ordered list
+    const olm=line.match(/^(\d+)\.\s+(.*)/);
+    if(olm){
+      const items=[];
+      while(i<lines.length&&lines[i].match(/^\d+\.\s+/)){
+        const m2=lines[i].match(/^\d+\.\s+(.*)/);
+        items.push(m2[1]);i++;
+      }
+      elements.push(
+        <ol key={`ol${i}`} style={{paddingLeft:22,margin:"8px 0",display:"flex",flexDirection:"column",gap:5}}>
+          {items.map((it,j)=>(
+            <li key={j} style={{fontSize:13.5,lineHeight:1.65,color:"inherit"}}>
+              <span style={{marginLeft:4}}>{parseInline(it)}</span>
+            </li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    // Unordered list
+    const ulm=line.match(/^[-*•]\s+(.*)/);
+    if(ulm){
+      const items=[];
+      while(i<lines.length&&lines[i].match(/^[-*•]\s+/)){
+        const m2=lines[i].match(/^[-*•]\s+(.*)/);
+        items.push(m2[1]);i++;
+      }
+      elements.push(
+        <ul key={`ul${i}`} style={{paddingLeft:0,margin:"8px 0",display:"flex",flexDirection:"column",gap:5,listStyle:"none"}}>
+          {items.map((it,j)=>(
+            <li key={j} style={{display:"flex",gap:8,fontSize:13.5,lineHeight:1.65,color:C.text,alignItems:"flex-start"}}>
+              <span style={{color:C.accent,fontWeight:700,marginTop:1,flexShrink:0}}>▸</span>
+              <span>{parseInline(it)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    // Blockquote / callout
+    const bqm=line.match(/^>\s+(.*)/);
+    if(bqm){
+      const bqLines=[];
+      while(i<lines.length&&lines[i].match(/^>\s?/)){
+        bqLines.push(lines[i].replace(/^>\s?/,""));i++;
+      }
+      elements.push(
+        <div key={`bq${i}`} style={{borderLeft:`3px solid ${C.accent}`,paddingLeft:12,margin:"8px 0",
+          background:C.accentDim,borderRadius:"0 8px 8px 0",padding:"10px 14px"}}>
+          {bqLines.map((l,j)=><div key={j} style={{fontSize:13,color:C.navy,fontStyle:"italic"}}>{parseInline(l)}</div>)}
+        </div>
+      );
+      continue;
+    }
+
+    // Code block
+    if(line.startsWith("```")){
+      const lang=line.slice(3).trim();
+      i++;
+      const codeLines=[];
+      while(i<lines.length&&!lines[i].startsWith("```")){codeLines.push(lines[i]);i++;}
+      i++;
+      elements.push(
+        <div key={`code${i}`} style={{background:C.navy,borderRadius:10,margin:"8px 0",overflow:"hidden"}}>
+          {lang&&<div style={{padding:"5px 14px",background:C.navyLight||"#2A3860",fontSize:11,color:C.accent,fontWeight:600,fontFamily:"IBM Plex Mono"}}>{lang}</div>}
+          <pre style={{padding:"12px 16px",margin:0,fontSize:12,fontFamily:"IBM Plex Mono",color:"#e2e8f0",overflowX:"auto",lineHeight:1.6}}>{codeLines.join("\n")}</pre>
+        </div>
+      );
+      continue;
+    }
+
+    // Step label: "Step 1:" or "1)" pattern at start of line
+    const stepM=line.match(/^(Step\s+\d+:|Phase\s+\d+:|\d+\))\s*(.*)/i);
+    if(stepM){
+      elements.push(
+        <div key={i} style={{display:"flex",gap:10,alignItems:"flex-start",margin:"8px 0",
+          padding:"10px 14px",background:C.primaryDim,borderRadius:10,border:`1px solid ${C.primary}20`}}>
+          <span style={{background:C.primary,color:"#fff",borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}}>{stepM[1]}</span>
+          <span style={{fontSize:13.5,lineHeight:1.6,color:C.navy}}>{parseInline(stepM[2])}</span>
+        </div>
+      );
+      i++;continue;
+    }
+
+    // Normal paragraph
+    const paraLines=[];
+    while(i<lines.length&&lines[i].trim()!==""&&!lines[i].match(/^[#>*\-\d`|]/)&&!lines[i].match(/^Step\s+\d+:/i)){
+      paraLines.push(lines[i]);i++;
+    }
+    if(paraLines.length>0){
+      elements.push(
+        <p key={`p${i}`} style={{fontSize:13.5,lineHeight:1.7,color:"inherit",margin:"4px 0"}}>
+          {parseInline(paraLines.join(" "))}
+        </p>
+      );
+    } else {i++;}
+  }
+
+  return <div style={{display:"flex",flexDirection:"column",gap:3,color:"inherit"}}>{elements}</div>;
+}
+
+// ── CLAUDE API ─────────────────────────────────────────────
+async function callClaude(msgs, system=null, maxTok=900){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),30000);
+  try{
+    const res=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      signal:controller.signal,
+      headers:{
+        "Content-Type":"application/json",
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true",
+        ...(window.__BT_API_KEY?{"x-api-key":window.__BT_API_KEY}:{})
+      },
+      body:JSON.stringify({
+        model:"claude-sonnet-4-6",
+        max_tokens:maxTok,
+        ...(system?{system}:{}),
+        messages:msgs
+      })
+    });
+    clearTimeout(timer);
+    if(!res.ok){
+      const err=await res.json().catch(()=>({}));
+      return "⚠️ API Error "+res.status+": "+(err?.error?.message||res.statusText);
+    }
+    const d=await res.json();
+    if(d.error)return"⚠️ "+d.error.type+": "+d.error.message;
+    return d.content?.[0]?.text||"No response received.";
+  }catch(e){
+    clearTimeout(timer);
+    if(e.name==="AbortError")return"⚠️ Request timed out (30s). Check your network and try again.";
+    return"⚠️ Network error: "+e.message;
+  }
+}
+
+// ── COMMON UI COMPONENTS ───────────────────────────────────
+const Badge=({children,color=C.primary})=>(
+  <span style={{background:color+"18",color,border:`1px solid ${color}30`,borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{children}</span>
+);
+const StatusBadge=({s})=>{
+  const map={active:{c:C.success,l:"● Active"},warning:{c:C.warn,l:"⚠ Warning"},inactive:{c:C.muted,l:"○ Inactive"},pending:{c:C.blue,l:"◎ Pending"}};
+  const m=map[s]||map.inactive;
+  return <Badge color={m.c}>{m.l}</Badge>;
+};
+const Card=({children,style={}})=>(
+  <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"20px 24px",...style}}>{children}</div>
+);
+const Btn=({children,variant="primary",onClick,disabled,small,style={}})=>{
+  const base={border:"none",borderRadius:8,fontWeight:600,cursor:disabled?"not-allowed":"pointer",
+    fontSize:small?12:14,padding:small?"6px 14px":"9px 20px",transition:"all .15s",opacity:disabled?.6:1,...style};
+  const vars={
+    primary:{background:C.primary,color:"#fff"},
+    outline:{background:"transparent",color:C.primary,border:`1.5px solid ${C.primary}`},
+    danger:{background:C.danger,color:"#fff"},
+    ghost:{background:C.primaryDim,color:C.primary},
+    accent:{background:C.accent,color:"#fff"},
+    warn:{background:C.warn,color:"#fff"},
+  };
+  return <button style={{...base,...vars[variant]}} onClick={onClick} disabled={disabled}>{children}</button>;
+};
+const Input=({label,value,onChange,type="text",placeholder="",readOnly,style={}})=>(
+  <div style={{marginBottom:14}}>
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:C.navy,marginBottom:5}}>{label}</label>}
+    <input type={type} value={value} onChange={e=>onChange&&onChange(e.target.value)} placeholder={placeholder} readOnly={readOnly}
+      style={{width:"100%",background:readOnly?"#f7f9fc":C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+        padding:"9px 13px",fontSize:13,color:C.text,outline:"none",...style}}/>
+  </div>
+);
+const Select=({label,value,onChange,options,style={}})=>(
+  <div style={{marginBottom:14}}>
+    {label&&<label style={{display:"block",fontSize:12,fontWeight:600,color:C.navy,marginBottom:5}}>{label}</label>}
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+        padding:"9px 13px",fontSize:13,color:C.text,outline:"none",...style}}>
+      {options.map(o=><option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
+    </select>
+  </div>
+);
+const Spinner=()=>(
+  <div style={{width:18,height:18,border:`2px solid ${C.border}`,borderTopColor:C.primary,borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+);
+const SectionTitle=({icon,title,sub})=>(
+  <div style={{marginBottom:22}}>
+    <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <span style={{fontSize:22}}>{icon}</span>
+      <h2 style={{fontSize:20,fontWeight:700,color:C.navy}}>{title}</h2>
+    </div>
+    {sub&&<p style={{color:C.muted,fontSize:13,marginTop:4,marginLeft:32}}>{sub}</p>}
+  </div>
+);
+
+// ── SPARKLINE HELPER ──────────────────────────────────────
+function MiniSparkline({data,color}){
+  const max=Math.max(...data);
+  const w=80,h=32,bars=data.length,bw=w/bars-2;
+  return(
+    <svg width={w} height={h} style={{display:"block"}}>
+      {data.map((v,i)=>{
+        const barH=Math.round((v/max)*(h-4));
+        return <rect key={i} x={i*(bw+2)} y={h-barH} width={bw} height={barH}
+          rx={2} fill={color} opacity={i===data.length-1?1:0.35}/>;
+      })}
+    </svg>
+  );
+}
+function WeeklyChart({data,color}){
+  const max=Math.max(...data);
+  const days=["M","T","W","T","F","S","S"];
+  return(
+    <div style={{display:"flex",alignItems:"flex-end",gap:6,height:60}}>
+      {data.map((v,i)=>(
+        <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+          <div style={{width:"100%",background:i===data.length-1?color:color+"55",borderRadius:"3px 3px 0 0",
+            height:Math.round((v/max)*52),transition:"height .3s",minHeight:3}}/>
+          <span style={{fontSize:9,color:C.muted,fontWeight:500}}>{days[i]}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+// ── MASTER CATALOG ─────────────────────────────────────────
+const PRODUCT_GROUPS = {
+  "Heating":    {color:"#E8593C", icon:"🔥", desc:"Elements, igniters, thermostats"},
+  "Motors":     {color:"#378ADD", icon:"⚙️", desc:"Drive, pump, blower motors"},
+  "Electronics":{color:"#534AB7", icon:"💻", desc:"Control boards, sensors, PCBs"},
+  "Mechanical": {color:"#0F6E56", icon:"🔩", desc:"Springs, valves, pumps, seals"},
+  "Compressors":{color:"#BA7517", icon:"❄️", desc:"Refrigeration compressors"},
+  "Ice Systems":{color:"#185FA5", icon:"🧊", desc:"Ice makers, water dispensers"},
+};
+
+const MASTER_CATALOG = [
+  {sku:"APM-HTR-001",name:"Heating Element 240V",group:"Heating",price:28.50,bulk:22.00,bqty:10,stock:847,desc:"Universal dryer element 240V 5400W",brands:["Whirlpool","Maytag","GE"]},
+  {sku:"APM-IGN-011",name:"Oven Igniter Flat Style",group:"Heating",price:22.00,bulk:17.50,bqty:10,stock:678,desc:"Flat glowbar igniter gas ovens",brands:["GE","Hotpoint"]},
+  {sku:"APM-MTR-002",name:"Washer Drive Motor",group:"Motors",price:145.00,bulk:118.00,bqty:5,stock:203,desc:"Direct drive motor top-load washers",brands:["Kenmore","Whirlpool"]},
+  {sku:"APM-PMP-005",name:"Drain Pump Assembly",group:"Motors",price:42.00,bulk:35.00,bqty:8,stock:1204,desc:"Universal drain pump 120V",brands:["All Brands"]},
+  {sku:"APM-BRD-004",name:"Control Board Assembly",group:"Electronics",price:189.00,bulk:155.00,bqty:5,stock:312,desc:"Main PCB for dishwashers",brands:["Bosch","Electrolux"]},
+  {sku:"APM-SEN-007",name:"Temperature Sensor NTC",group:"Electronics",price:12.50,bulk:9.50,bqty:20,stock:2340,desc:"10K NTC thermistor",brands:["Universal"]},
+  {sku:"APM-VLV-006",name:"Water Inlet Valve Dual",group:"Mechanical",price:31.00,bulk:24.00,bqty:12,stock:567,desc:"Dual-coil water inlet valve",brands:["Whirlpool","Maytag"]},
+  {sku:"APM-SPR-012",name:"Suspension Spring Set 4pc",group:"Mechanical",price:24.00,bulk:19.00,bqty:8,stock:1120,desc:"Washer tub suspension kit",brands:["Whirlpool","Maytag"]},
+  {sku:"APM-CMP-003",name:"Refrigerator Compressor",group:"Compressors",price:320.00,bulk:275.00,bqty:3,stock:94,desc:"R134a compatible compressor 1/5HP",brands:["Samsung","LG","GE"]},
+  {sku:"APM-ICE-009",name:"Ice Maker Assembly",group:"Ice Systems",price:98.00,bulk:82.00,bqty:4,stock:156,desc:"Complete ice maker module",brands:["Whirlpool","KitchenAid"]},
+];
+
+// ── CUSTOMER REGISTRY ───────────────────────────────────────
+const INIT_CUSTOMERS = [
+  {id:"MRR-001",name:"Marriott Hotels & Resorts",type:"B2B Buyer",contact:"procurement@marriott.com",
+   allowedGroups:["Heating","Electronics"],allowedSkus:[],spend:284000,orders:142,status:"active"},
+  {id:"MCD-042",name:"McDonald's Corp",type:"B2B Buyer",contact:"ops@mcdonalds.com",
+   allowedGroups:["Motors","Mechanical"],allowedSkus:["APM-SEN-007"],spend:156000,orders:98,status:"active"},
+  {id:"WIN-009",name:"Wyndham Hotels",type:"B2B Buyer",contact:"supply@wyndham.com",
+   allowedGroups:["Heating","Motors","Electronics"],allowedSkus:[],spend:198000,orders:87,status:"active"},
+  {id:"HDT-007",name:"Home Depot",type:"Dealer",contact:"vendor@homedepot.com",
+   allowedGroups:["Heating","Motors","Electronics","Mechanical","Compressors","Ice Systems"],allowedSkus:[],spend:622000,orders:344,status:"active"},
+  {id:"LWS-003",name:"Lowe's Companies",type:"Dealer",contact:"buying@lowes.com",
+   allowedGroups:["Heating","Electronics","Mechanical"],allowedSkus:[],spend:412000,orders:218,status:"active"},
+  {id:"BBY-011",name:"Best Buy Co.",type:"Dealer",contact:"replenish@bestbuy.com",
+   allowedGroups:["Electronics","Ice Systems","Compressors"],allowedSkus:[],spend:289000,orders:156,status:"active"},
+];
+
+// Customer catalog filter: returns SKUs allowed for a given customer
+function getCustomerCatalog(customerId, customers=INIT_CUSTOMERS){
+  const cust = customers.find(c=>c.id===customerId);
+  if(!cust) return MASTER_CATALOG;
+  return MASTER_CATALOG.filter(p=>
+    cust.allowedGroups.includes(p.group)||cust.allowedSkus.includes(p.sku)
+  );
+}
+
+// ── OMS SYSTEMS ─────────────────────────────────────────────
+const OMS_SYSTEMS = [
+  {id:"SAP",name:"SAP ERP",color:"#BA7517",desc:"Parts orders, finance, fulfilment",
+   endpoint:"https://sap.internal/api/orders",auth:"OAuth 2.0",latency:140,
+   handles:["bulk_parts","b2b_large","dealer_replenishment"]},
+  {id:"MSD",name:"MS Dynamics 365",color:"#534AB7",desc:"Wholesale B2B, customer accounts",
+   endpoint:"https://dynamics.internal/api/v2",auth:"Bearer Token",latency:180,
+   handles:["wholesale_b2b","hospitality","commercial_kitchen"]},
+  {id:"WMS",name:"Legacy WMS / OMS",color:"#5F5E5A",desc:"Warehouse management, despatch",
+   endpoint:"https://wms.internal/dispatch",auth:"API Key",latency:95,
+   handles:["warehouse","small_orders","urgent_despatch"]},
+];
+
+// ── MARKETPLACE PORTALS ─────────────────────────────────────
+const MARKETPLACE_PORTALS = [
+  {id:"ARB",name:"SAP Ariba",color:"#0070A0",endpoint:"https://api.ariba.com/v2",
+   webhook:"/hooks/bridgetech",pollInterval:30,ordersToday:24,lastSync:"2m ago",status:"active"},
+  {id:"SNW",name:"ServiceNow",color:"#81B5A1",endpoint:"https://instance.service-now.com/api",
+   webhook:"/hooks/bt",pollInterval:60,ordersToday:11,lastSync:"5m ago",status:"active"},
+  {id:"GRN",name:"Grainger",color:"#E31837",endpoint:"https://api.grainger.com/catalog",
+   webhook:"/hooks/bt",pollInterval:120,ordersToday:8,lastSync:"12m ago",status:"active"},
+  {id:"AMZ",name:"Amazon Business",color:"#FF9900",endpoint:"https://sellingpartner.amazon.com",
+   webhook:"/hooks/bt",pollInterval:30,ordersToday:31,lastSync:"1m ago",status:"active"},
+];
+
+// Global portal request store for Schema Bridge
+if(!window.__PORTAL_REQUESTS) window.__PORTAL_REQUESTS = [
+  {id:"PR-001",name:"Acme Parts Vendor",type:"B2B Buyer",role:"B2B Buyer",
+   baseUrl:"https://api.acmeparts.com/v2",auth:"Bearer Token",apiKey:"",
+   inbound:"/orders/incoming",outbound:"/catalog/export",
+   schema:JSON.stringify({"order_request":{"order_ref":"string","buyer_id":"string","placed_on":"MM/DD/YYYY","currency":"string","total":"float","state":"new|shipped","items":[{"prod_id":"string","qty":"int","unit_price":"float"}],"delivery":{"street":"string","city":"string","postal":"string","nation":"string"}}}),
+   submittedAt:"Mar 25, 2026 · 09:14 AM",status:"pending",bridgeStatus:"pending"},
+  {id:"PR-002",name:"FastParts Dealer Network",type:"Dealer",role:"Dealer",
+   baseUrl:"https://fastparts.net/integration",auth:"OAuth 2.0",apiKey:"",
+   inbound:"/purchase-orders",outbound:"/inventory",
+   schema:JSON.stringify({"purchase_order":{"po_id":"string","dealer_code":"string","order_date":"YYYY-MM-DD","currency":"string","amount_total":"decimal","po_status":"open|closed|pending","line_items":[{"line_num":"integer","part_number":"string","ordered_qty":"integer","line_price":"decimal"}],"delivery":{"address_1":"string","city_name":"string","post_code":"string","country_iso":"ISO2"}}}),
+   submittedAt:"Mar 25, 2026 · 02:45 PM",status:"pending",bridgeStatus:"pending"},
+];
+
+let _rId = 5000;
+function rnd(a){return a[Math.floor(Math.random()*a.length)];}
+const INTENTS=["OrderCreate","CatalogSync","InventoryCheck","PartLookup","WebhookEvent","AuthValidate"];
+
+// ── NAVIGATION ─────────────────────────────────────────────
+const NAV_ADMIN=[
+  {id:"dashboard",icon:"⚡",label:"Dashboard"},
+  {id:"catalog",icon:"📦",label:"Gen AI Catalog"},
+  {id:"customers",icon:"🏢",label:"Customer Registry"},
+  {id:"api-monitor",icon:"🔌",label:"Universal API Monitor"},
+  {id:"order-listener",icon:"👂",label:"Order Listener"},
+  {id:"ai-routing",icon:"🧠",label:"AI Routing Monitor"},
+  {id:"oms-registry",icon:"🏭",label:"OMS Registry"},
+  {id:"schema-bridge",icon:"🔗",label:"AI Schema Bridge"},
+  {id:"churn",icon:"📉",label:"Churn Signals"},
+  {id:"intent",icon:"🎯",label:"Intent Monitor"},
+  {id:"support",icon:"🛡️",label:"AI Support Agent"},
+];
+const NAV_B2B=[
+  {id:"dashboard",icon:"⚡",label:"Dashboard"},
+  {id:"catalog",icon:"📦",label:"Browse Catalog"},
+  {id:"orders",icon:"📋",label:"My Orders"},
+  {id:"track",icon:"📍",label:"Order Tracking"},
+  {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+];
+const NAV_DEALER=[
+  {id:"dashboard",icon:"⚡",label:"Dashboard"},
+  {id:"catalog",icon:"📦",label:"Parts Catalog"},
+  {id:"replenishment",icon:"📋",label:"Replenishment Orders"},
+  {id:"track",icon:"📍",label:"Order Tracking"},
+  {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+];
+const NAV_B2P=[
+  {id:"dashboard",icon:"⚡",label:"Dashboard"},
+  {id:"catalog-sync",icon:"🔄",label:"Catalog Sync"},
+  {id:"marketplace-orders",icon:"📋",label:"Marketplace Orders"},
+  {id:"api-setup",icon:"🔧",label:"API Service Setup"},
+];
+
+function getNav(role){
+  if(role==="Admin") return NAV_ADMIN;
+  if(role==="B2B Buyer") return NAV_B2B;
+  if(role==="Dealer") return NAV_DEALER;
+  if(role==="B2P Portal") return NAV_B2P;
+  return NAV_B2B;
+}
+
+function Sidebar({active,setActive,role,onLogout}){
+  const nav=getNav(role);
+  const roleColors={"Admin":"#534AB7","B2B Buyer":C.accent,"Dealer":C.success,"B2P Portal":C.coral||"#D85A30"};
+  const rc=roleColors[role]||C.accent;
+  return(
+    <div style={{width:224,background:C.sidebar,display:"flex",flexDirection:"column",height:"100vh",flexShrink:0}}>
+      <div style={{padding:"20px 18px 16px",borderBottom:`1px solid ${C.sidebarBorder}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <div style={{width:38,height:38,background:`linear-gradient(135deg,${C.accent},${C.primary})`,borderRadius:10,
+            display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,color:"#fff"}}>B</div>
+          <div>
+            <div style={{color:"#fff",fontWeight:700,fontSize:14,letterSpacing:"-0.2px"}}>BridgeTech</div>
+            <div style={{color:C.accent,fontSize:10,fontWeight:500,letterSpacing:"0.3px"}}>MFG ORCHESTRATION</div>
+          </div>
+        </div>
+      </div>
+      <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+        {nav.map(n=>(
+          <button key={n.id} onClick={()=>setActive(n.id)}
+            style={{width:"100%",display:"flex",alignItems:"center",gap:11,padding:"9px 16px",border:"none",
+              background:active===n.id?"rgba(0,198,185,0.14)":"transparent",
+              color:active===n.id?C.accent:"rgba(255,255,255,0.65)",
+              borderLeft:active===n.id?`3px solid ${C.accent}`:"3px solid transparent",
+              fontSize:12.5,fontWeight:active===n.id?600:400,cursor:"pointer",transition:"all .12s",textAlign:"left"}}>
+            <span style={{fontSize:15}}>{n.icon}</span>{n.label}
+          </button>
+        ))}
+      </div>
+      <div style={{padding:"12px 16px",borderTop:`1px solid ${C.sidebarBorder}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{width:26,height:26,borderRadius:"50%",background:rc,display:"flex",alignItems:"center",
+            justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff"}}>{role[0]}</div>
+          <div>
+            <div style={{color:"#fff",fontSize:11.5,fontWeight:600}}>{role}</div>
+            <div style={{color:"rgba(255,255,255,0.4)",fontSize:10}}>BridgeTech v3.0</div>
+          </div>
+        </div>
+        <button onClick={onLogout} style={{width:"100%",padding:"7px",border:`1px solid ${C.sidebarBorder}`,borderRadius:7,
+          background:"rgba(255,255,255,0.04)",color:"rgba(255,255,255,0.5)",fontSize:11.5,cursor:"pointer"}}>
+          ↩ Sign Out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── LOGIN ──────────────────────────────────────────────────
+function Login({onLogin}){
+  const [role,setRole]=useState("B2B Buyer");
+  const roles=[
+    {r:"B2B Buyer",icon:"🏨",desc:"Hotels · Restaurants · Kitchens",color:"#00C6B9",
+     examples:"Marriott, McDonald's, Wyndham",
+     features:["Marketplace ordering","Direct API access","Customer catalog"]},
+    {r:"B2P Portal",icon:"🛒",desc:"eCommerce & trade marketplace",color:"#D85A30",
+     examples:"SAP Ariba, ServiceNow, Grainger",
+     features:["Catalog sync","Marketplace orders","Webhook listener"]},
+    {r:"Dealer",icon:"🏪",desc:"Retail & ecommerce stores",color:"#22C55E",
+     examples:"Home Depot, Lowe's, Best Buy",
+     features:["Filtered catalog","Replenishment orders","Inventory sync"]},
+    {r:"Admin",icon:"🛡️",desc:"Full platform administration",color:"#534AB7",
+     examples:"BridgeTech Operations Team",
+     features:["All modules","AI routing","OMS registry"]},
+  ];
+  const sel=roles.find(x=>x.r===role);
+  return(
+    <div style={{minHeight:"100vh",display:"flex",background:C.bg,overflow:"hidden"}}>
+      {/* Left panel */}
+      <div style={{width:"50%",background:`linear-gradient(160deg,${C.sidebar} 0%,#0A2A45 60%,${C.primary} 100%)`,
+        display:"flex",flexDirection:"column",justifyContent:"space-between",padding:"48px 52px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",inset:0,opacity:0.04,
+          backgroundImage:"linear-gradient(rgba(255,255,255,.5) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.5) 1px,transparent 1px)",
+          backgroundSize:"40px 40px"}}/>
+        <div style={{position:"absolute",top:-100,right:-100,width:350,height:350,borderRadius:"50%",
+          background:`radial-gradient(circle,${C.accent}28 0%,transparent 70%)`}}/>
+        <div style={{position:"relative",zIndex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:48}}>
+            <div style={{width:46,height:46,background:`linear-gradient(135deg,${C.accent},${C.primary})`,borderRadius:13,
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:800,color:"#fff"}}>B</div>
+            <div>
+              <div style={{color:"#fff",fontWeight:800,fontSize:18,letterSpacing:"-0.3px"}}>BridgeTech</div>
+              <div style={{color:C.accent,fontSize:11,fontWeight:500,letterSpacing:"0.6px"}}>MANUFACTURING ORCHESTRATION PLATFORM</div>
+            </div>
+          </div>
+          <h1 style={{fontSize:36,fontWeight:800,color:"#fff",lineHeight:1.2,marginBottom:14,letterSpacing:"-0.5px"}}>
+            Unified ordering.<br/>
+            <span style={{background:`linear-gradient(90deg,${C.accent},#467FF7)`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
+              Zero integration overhead.
+            </span>
+          </h1>
+          <p style={{color:"rgba(255,255,255,0.58)",fontSize:14.5,lineHeight:1.7,marginBottom:40,maxWidth:380}}>
+            Connect B2B Buyers, marketplace portals and dealers to a single universal manufacturing API — with AI-powered schema bridging and intelligent order routing.
+          </p>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            {[
+              {icon:"🧠",t:"AI Schema Bridge",d:"Upload any API schema — agent maps it automatically"},
+              {icon:"🔀",t:"AI Order Routing",d:"Vector + RAG + LLM routes to the right legacy system"},
+              {icon:"📡",t:"Marketplace Listener",d:"Webhooks from SAP Ariba, ServiceNow, Grainger, Amazon"},
+              {icon:"📦",t:"Customer Catalog",d:"Product groups + per-customer SKU filtering by ID"},
+            ].map((f,i)=>(
+              <div key={i} style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                <div style={{width:36,height:36,borderRadius:9,background:"rgba(255,255,255,0.07)",
+                  border:"1px solid rgba(255,255,255,0.11)",display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:17,flexShrink:0}}>{f.icon}</div>
+                <div>
+                  <div style={{color:"#fff",fontWeight:600,fontSize:13,marginBottom:1}}>{f.t}</div>
+                  <div style={{color:"rgba(255,255,255,0.48)",fontSize:11.5,lineHeight:1.5}}>{f.d}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{position:"relative",zIndex:1,borderTop:"1px solid rgba(255,255,255,0.10)",paddingTop:24}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+            {[{v:"4",l:"Order flows"},{v:"3",l:"OMS systems"},{v:"180+",l:"SKUs managed"},{v:"<300ms",l:"Routing time"}].map((s,i)=>(
+              <div key={i} style={{textAlign:"center"}}>
+                <div style={{fontSize:19,fontWeight:800,color:C.accent,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+                <div style={{fontSize:10.5,color:"rgba(255,255,255,0.42)",marginTop:2}}>{s.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Right panel */}
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:"40px 48px"}}>
+        <div style={{width:"100%",maxWidth:420}}>
+          <div style={{marginBottom:30}}>
+            <h2 style={{fontSize:24,fontWeight:800,color:C.navy,marginBottom:6}}>Select your role</h2>
+            <p style={{color:C.muted,fontSize:13.5}}>Access is tailored to your channel and workflow</p>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:24}}>
+            {roles.map(({r,icon,desc,color,examples,features:ff})=>{
+              const isSel=role===r;
+              return(
+                <button key={r} onClick={()=>setRole(r)}
+                  style={{padding:"16px 14px",border:`2px solid ${isSel?color:C.border}`,borderRadius:13,
+                    background:isSel?`${color}0E`:C.surface,cursor:"pointer",textAlign:"left",transition:"all .16s",
+                    boxShadow:isSel?`0 4px 18px ${color}22`:"0 1px 3px rgba(0,0,0,0.04)",
+                    transform:isSel?"translateY(-1px)":"none"}}>
+                  <div style={{width:34,height:34,borderRadius:9,background:isSel?`${color}18`:"#F3F5F8",
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,marginBottom:9}}>{icon}</div>
+                  <div style={{fontSize:13.5,fontWeight:700,color:isSel?color:C.navy,marginBottom:2}}>{r}</div>
+                  <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:isSel?8:0}}>{desc}</div>
+                  {isSel&&(
+                    <div style={{paddingTop:8,borderTop:`1px solid ${color}20`}}>
+                      {ff.map((feat,fi)=>(
+                        <div key={fi} style={{display:"flex",alignItems:"center",gap:5,marginBottom:3}}>
+                          <span style={{width:4,height:4,borderRadius:"50%",background:color,display:"inline-block",flexShrink:0}}/>
+                          <span style={{fontSize:10.5,color:color,fontWeight:500}}>{feat}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={()=>onLogin(role)}
+            style={{width:"100%",padding:"13px",border:"none",borderRadius:11,
+              background:`linear-gradient(135deg,${sel.color},${C.primary})`,
+              color:"#fff",fontSize:14.5,fontWeight:700,cursor:"pointer",
+              boxShadow:`0 8px 22px ${sel.color}38`,transition:"all .18s",letterSpacing:"0.1px"}}>
+            Enter as {role} →
+          </button>
+          <div style={{marginTop:18,padding:"12px 16px",background:C.primaryDim,borderRadius:9,
+            border:`1px solid ${C.primary}20`,display:"flex",alignItems:"center",gap:9}}>
+            <span style={{width:7,height:7,borderRadius:"50%",background:C.success,display:"inline-block",
+              boxShadow:`0 0 0 3px ${C.success}28`}}/>
+            <span style={{fontSize:11.5,color:C.primary,fontWeight:500}}>
+              All systems operational · Universal Bridge API active
+            </span>
+          </div>
+          <p style={{textAlign:"center",fontSize:11.5,color:C.muted,marginTop:20}}>
+            BridgeTech Manufacturing Orchestration Platform · v3.0 · © 2026 Bridge Technology Solutions Inc.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ADMIN DASHBOARD ────────────────────────────────────────
+function AdminDashboard({onNavigate}){
+  const nav=onNavigate||(()=>{});
+  const [liveReqs,setLiveReqs]=useState(58420);
+  const [liveErr,setLiveErr]=useState(1.7);
+  useEffect(()=>{
+    const t=setInterval(()=>{
+      setLiveReqs(r=>r+Math.floor(Math.random()*15));
+      setLiveErr(e=>Math.max(0.8,Math.min(3,+(e+((Math.random()-.5)*.08)).toFixed(2))));
+    },2800);
+    return()=>clearInterval(t);
+  },[]);
+  const kpis=[
+    {l:"API Requests Today",v:liveReqs.toLocaleString(),c:C.accent,icon:"⚡",sub:"↑ 12.4% vs last week",page:"api-monitor"},
+    {l:"Active Channels",v:"4",c:C.primary,icon:"📡",sub:"B2B · B2P · Dealer · Marketplace",page:"order-listener"},
+    {l:"AI Routing Decisions",v:"1,284",c:"#534AB7",icon:"🧠",sub:"94.2% auto-routed",page:"ai-routing"},
+    {l:"OMS Systems",v:"3",c:C.success,icon:"🏭",sub:"SAP · Dynamics · WMS — all live",page:"oms-registry"},
+  ];
+  const orderFeed=[
+    {t:"12s ago",icon:"🏨",msg:"Marriott (MRR-001) · 50× Heating Element · Routed → SAP ERP · $1,100",c:C.accent},
+    {t:"1m ago",icon:"🏪",msg:"Home Depot (HDT-007) · Replenishment 200× SKUs · Routed → WMS",c:C.success},
+    {t:"3m ago",icon:"🛒",msg:"SAP Ariba webhook · McDonald's order #A-8821 · Routed → MS Dynamics",c:"#D85A30"},
+    {t:"5m ago",icon:"🧠",msg:"AI routing: low confidence (68%) → escalated to human review queue",c:C.warn},
+    {t:"8m ago",icon:"🔗",msg:"Schema bridge activated: FastParts Dealer Network · 14 field mappings applied",c:"#534AB7"},
+  ];
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Admin Dashboard</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Manufacturing Orchestration Platform · All channels · Real-time</p>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:7,padding:"6px 14px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:9}}>
+          <span style={{width:7,height:7,borderRadius:"50%",background:C.success,display:"inline-block",
+            animation:"pulse 2s ease-in-out infinite"}}/>
+          <span style={{fontSize:11.5,fontWeight:600,color:C.success}}>All Systems Operational</span>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:18}}>
+        {kpis.map((s,i)=>(
+          <div key={i} onClick={()=>nav(s.page)}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"16px 18px",borderTop:`3px solid ${s.c}`,cursor:"pointer",transition:"all .14s"}}
+            onMouseEnter={e=>e.currentTarget.style.boxShadow=`0 4px 16px ${s.c}18`}
+            onMouseLeave={e=>e.currentTarget.style.boxShadow=""}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.4px"}}>{s.l}</div>
+              <span style={{fontSize:16}}>{s.icon}</span>
+            </div>
+            <div style={{fontSize:24,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono",marginBottom:3}}>{s.v}</div>
+            <div style={{fontSize:11,color:C.muted}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr 1fr",gap:14,marginBottom:14}}>
+        {/* Channel status */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Channel Status</span>
+            <span style={{fontSize:11,color:C.muted}}>4 active channels</span>
+          </div>
+          {[
+            {ch:"B2B Buyer (Marketplace)",icon:"🏨",req:"24.3K",err:"0.8%",lat:"210ms",c:C.accent,page:"order-listener"},
+            {ch:"B2B Buyer (Direct API)",icon:"🔌",req:"18.7K",err:"1.2%",lat:"140ms",c:C.blue,page:"api-monitor"},
+            {ch:"B2P Portal Sync",icon:"🛒",req:"8.1K",err:"0.5%",lat:"180ms",c:"#D85A30",page:"order-listener"},
+            {ch:"Dealer (Direct API)",icon:"🏪",req:"7.4K",err:"2.1%",lat:"95ms",c:C.success,page:"api-monitor"},
+          ].map((r,i)=>(
+            <div key={i} onClick={()=>nav(r.page)}
+              style={{display:"flex",alignItems:"center",gap:12,padding:"10px 18px",
+                borderBottom:i<3?`1px solid ${C.bg}`:"none",cursor:"pointer",transition:"background .1s"}}
+              onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+              onMouseLeave={e=>e.currentTarget.style.background=""}>
+              <span style={{fontSize:18}}>{r.icon}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,fontWeight:600,color:C.navy,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.ch}</div>
+              </div>
+              <div style={{display:"flex",gap:10,flexShrink:0}}>
+                <span style={{fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{r.req}</span>
+                <span style={{fontSize:11,fontFamily:"IBM Plex Mono",color:parseFloat(r.err)>1.5?C.warn:C.success}}>{r.err}</span>
+                <span style={{fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{r.lat}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* OMS status */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.navy}}>OMS Systems</span>
+          </div>
+          {OMS_SYSTEMS.map((o,i)=>(
+            <div key={i} onClick={()=>nav("oms-registry")}
+              style={{padding:"12px 16px",borderBottom:i<2?`1px solid ${C.bg}`:"none",cursor:"pointer"}}
+              onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+              onMouseLeave={e=>e.currentTarget.style.background=""}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.navy}}>{o.name}</span>
+                <span style={{width:7,height:7,borderRadius:"50%",background:C.success,display:"inline-block"}}/>
+              </div>
+              <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{o.desc}</div>
+              <div style={{display:"flex",gap:6}}>
+                <span style={{padding:"2px 7px",borderRadius:10,background:`${o.color}15`,color:o.color,fontSize:10,fontWeight:600}}>{o.latency}ms</span>
+                <span style={{padding:"2px 7px",borderRadius:10,background:C.bg,color:C.muted,fontSize:10}}>{o.handles[0]}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* Live feed */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Live Activity</span>
+            <span style={{display:"flex",alignItems:"center",gap:5,fontSize:10.5,color:C.success,fontWeight:600}}>
+              <span style={{width:5,height:5,borderRadius:"50%",background:C.success,animation:"pulse 1.5s ease-in-out infinite",display:"inline-block"}}/>Live
+            </span>
+          </div>
+          <div style={{padding:"4px 0"}}>
+            {orderFeed.map((f,i)=>(
+              <div key={i} style={{display:"flex",gap:10,padding:"9px 14px",borderBottom:i<orderFeed.length-1?`1px solid ${C.bg}`:"none"}}>
+                <span style={{fontSize:15,flexShrink:0}}>{f.icon}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,color:C.text,lineHeight:1.4,marginBottom:2,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{f.msg}</div>
+                  <div style={{fontSize:10,color:C.muted}}>{f.t}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── B2B BUYER DASHBOARD ─────────────────────────────────────
+function B2BBuyerDashboard({onNavigate,customerId="MRR-001"}){
+  const nav=onNavigate||(()=>{});
+  const cust=INIT_CUSTOMERS.find(c=>c.id===customerId)||INIT_CUSTOMERS[0];
+  const myCatalog=getCustomerCatalog(customerId);
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Welcome, {cust.name}</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Customer ID: <span style={{fontFamily:"IBM Plex Mono",color:C.primary}}>{cust.id}</span> · {cust.type} · Catalog: {myCatalog.length} SKUs across {cust.allowedGroups.length} product groups</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:18}}>
+        {[
+          {l:"MTD Spend",v:`$${(cust.spend/1000).toFixed(0)}K`,c:C.accent,icon:"💰",page:"orders"},
+          {l:"Total Orders",v:cust.orders.toString(),c:C.primary,icon:"📋",page:"orders"},
+          {l:"My Catalog SKUs",v:myCatalog.length.toString(),c:"#534AB7",icon:"📦",page:"catalog"},
+          {l:"Avg Delivery",v:"2.4d",c:C.success,icon:"🚚",page:"track"},
+        ].map((s,i)=>(
+          <div key={i} onClick={()=>nav(s.page)}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"16px 18px",borderTop:`3px solid ${s.c}`,cursor:"pointer",transition:"all .14s"}}
+            onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+            onMouseLeave={e=>e.currentTarget.style.transform=""}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase"}}>{s.l}</div>
+              <span>{s.icon}</span>
+            </div>
+            <div style={{fontSize:24,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+      {/* Two ordering options */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+        <div style={{background:C.surface,border:`2px solid ${C.accent}30`,borderRadius:14,padding:"20px 22px",cursor:"pointer"}}
+          onClick={()=>nav("orders")}>
+          <div style={{fontSize:24,marginBottom:10}}>🏪</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.navy,marginBottom:6}}>Order via marketplace</div>
+          <div style={{fontSize:12.5,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+            Place orders through SAP Ariba, ServiceNow, or any connected marketplace. BridgeTech listens automatically — nothing changes on your side.
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {MARKETPLACE_PORTALS.slice(0,3).map(p=>(
+              <span key={p.id} style={{padding:"3px 9px",borderRadius:12,background:`${p.color}15`,color:p.color,fontSize:10.5,fontWeight:600}}>{p.name}</span>
+            ))}
+          </div>
+        </div>
+        <div style={{background:C.surface,border:`2px solid ${C.primary}30`,borderRadius:14,padding:"20px 22px",cursor:"pointer"}}
+          onClick={()=>nav("api-setup")}>
+          <div style={{fontSize:24,marginBottom:10}}>🔌</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.navy,marginBottom:6}}>Direct API access</div>
+          <div style={{fontSize:12.5,color:C.muted,lineHeight:1.6,marginBottom:12}}>
+            Call our Universal API directly from your ERP or portal. Three endpoints: catalog, order, and track — all responding in your configured schema.
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {["GET /catalog","POST /order","GET /track/{id}"].map(e=>(
+              <span key={e} style={{padding:"3px 9px",borderRadius:12,background:C.primaryDim,color:C.primary,fontSize:10.5,fontWeight:600,fontFamily:"IBM Plex Mono"}}>{e}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* My product groups */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 20px"}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:14}}>My product groups</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+          {cust.allowedGroups.map(g=>{
+            const grp=PRODUCT_GROUPS[g];
+            const skus=myCatalog.filter(p=>p.group===g);
+            return(
+              <div key={g} onClick={()=>nav("catalog")}
+                style={{padding:"12px 14px",borderRadius:10,border:`1px solid ${grp.color}30`,
+                  background:`${grp.color}08`,cursor:"pointer",transition:"all .14s"}}
+                onMouseEnter={e=>e.currentTarget.style.background=`${grp.color}14`}
+                onMouseLeave={e=>e.currentTarget.style.background=`${grp.color}08`}>
+                <div style={{fontSize:20,marginBottom:6}}>{grp.icon}</div>
+                <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:2}}>{g}</div>
+                <div style={{fontSize:11,color:grp.color,fontWeight:600}}>{skus.length} SKUs available</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DEALER DASHBOARD ────────────────────────────────────────
+function DealerDashboard({onNavigate,customerId="HDT-007"}){
+  const nav=onNavigate||(()=>{});
+  const cust=INIT_CUSTOMERS.find(c=>c.id===customerId)||INIT_CUSTOMERS[3];
+  const myCatalog=getCustomerCatalog(customerId);
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Welcome, {cust.name}</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Customer ID: <span style={{fontFamily:"IBM Plex Mono",color:C.success}}>{cust.id}</span> · Dealer · Full catalog: {myCatalog.length} SKUs</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:18}}>
+        {[
+          {l:"MTD Revenue",v:`$${(cust.spend/1000).toFixed(0)}K`,c:C.success,icon:"💵",page:"replenishment"},
+          {l:"Orders This Month",v:cust.orders.toString(),c:C.primary,icon:"📋",page:"replenishment"},
+          {l:"Catalog SKUs",v:myCatalog.length.toString(),c:"#534AB7",icon:"📦",page:"catalog"},
+          {l:"Avg Order Value",v:"$1,808",c:C.accent,icon:"📊",page:"replenishment"},
+        ].map((s,i)=>(
+          <div key={i} onClick={()=>nav(s.page)}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+              padding:"16px 18px",borderTop:`3px solid ${s.c}`,cursor:"pointer"}}
+            onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+            onMouseLeave={e=>e.currentTarget.style.transform=""}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase"}}>{s.l}</div>
+              <span>{s.icon}</span>
+            </div>
+            <div style={{fontSize:24,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:C.surface,border:`2px solid ${C.success}30`,borderRadius:14,padding:"20px 22px",marginBottom:14,cursor:"pointer"}}
+        onClick={()=>nav("api-setup")}>
+        <div style={{fontSize:15,fontWeight:700,color:C.navy,marginBottom:6}}>🔌 Direct API — 3 endpoints</div>
+        <div style={{fontSize:12.5,color:C.muted,marginBottom:12}}>
+          Connect your ERP or inventory system directly. Call our Universal API for filtered catalog, submit replenishment orders, and track fulfilment status in real time.
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {["GET /catalog?dealer="+cust.id,"POST /order","GET /track/{id}"].map(e=>(
+            <span key={e} style={{padding:"4px 10px",borderRadius:12,background:C.success+"12",color:C.success,fontSize:11,fontWeight:600,fontFamily:"IBM Plex Mono"}}>{e}</span>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 20px"}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:14}}>Product groups available</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+          {cust.allowedGroups.map(g=>{
+            const grp=PRODUCT_GROUPS[g];
+            const skus=myCatalog.filter(p=>p.group===g);
+            return(
+              <div key={g} onClick={()=>nav("catalog")}
+                style={{padding:"12px 14px",borderRadius:10,border:`1px solid ${grp.color}30`,background:`${grp.color}08`,cursor:"pointer"}}>
+                <div style={{fontSize:18,marginBottom:4}}>{grp.icon}</div>
+                <div style={{fontSize:12.5,fontWeight:700,color:C.navy}}>{g}</div>
+                <div style={{fontSize:11,color:grp.color,fontWeight:600}}>{skus.length} SKUs</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── B2P PORTAL DASHBOARD ────────────────────────────────────
+function B2PDashboard({onNavigate}){
+  const nav=onNavigate||(()=>{});
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>B2P Portal Dashboard</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Marketplace catalog sync · Order listener · Webhook status</p>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:18}}>
+        {[
+          {l:"Portals Synced",v:"4",c:"#D85A30",icon:"🛒"},
+          {l:"Orders Today",v:"74",c:C.primary,icon:"📋"},
+          {l:"SKUs Listed",v:"10",c:"#534AB7",icon:"📦"},
+          {l:"Last Sync",v:"1m ago",c:C.success,icon:"🔄"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px",borderTop:`3px solid ${s.c}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase"}}>{s.l}</div>
+              <span>{s.icon}</span>
+            </div>
+            <div style={{fontSize:24,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Marketplace Portals</span>
+          </div>
+          {MARKETPLACE_PORTALS.map((p,i)=>(
+            <div key={i} onClick={()=>nav("catalog-sync")}
+              style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                padding:"12px 18px",borderBottom:i<3?`1px solid ${C.bg}`:"none",cursor:"pointer"}}
+              onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+              onMouseLeave={e=>e.currentTarget.style.background=""}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:C.navy}}>{p.name}</div>
+                <div style={{fontSize:11,color:C.muted}}>{p.ordersToday} orders today · sync {p.lastSync}</div>
+              </div>
+              <span style={{width:8,height:8,borderRadius:"50%",background:C.success,display:"inline-block"}}/>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"18px 20px"}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>How it works</div>
+          {[
+            {n:"1",t:"Catalog synced to marketplace","d":"BridgeTech pushes your product groups to each portal schema"},
+            {n:"2",t:"Buyer places order","d":"Order fires webhook or is polled by Order Listener"},
+            {n:"3",t:"AI routes to OMS","d":"Vector + RAG + LLM picks the right legacy system"},
+            {n:"4",t:"Status confirmed","d":"Webhook back to marketplace — buyer sees live status"},
+          ].map((s,i)=>(
+            <div key={i} style={{display:"flex",gap:10,marginBottom:10}}>
+              <div style={{width:22,height:22,borderRadius:"50%",background:`#D85A3018`,border:"1px solid #D85A3040",
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#D85A30",flexShrink:0}}>{s.n}</div>
+              <div>
+                <div style={{fontSize:12.5,fontWeight:600,color:C.navy}}>{s.t}</div>
+                <div style={{fontSize:11,color:C.muted}}>{s.d}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DASHBOARD ROUTER ────────────────────────────────────────
+function Dashboard({role,onNavigate,customerId}){
+  if(role==="Admin") return <AdminDashboard onNavigate={onNavigate}/>;
+  if(role==="B2B Buyer") return <B2BBuyerDashboard onNavigate={onNavigate} customerId={customerId}/>;
+  if(role==="Dealer") return <DealerDashboard onNavigate={onNavigate} customerId={customerId}/>;
+  if(role==="B2P Portal") return <B2PDashboard onNavigate={onNavigate}/>;
+  return <B2BBuyerDashboard onNavigate={onNavigate}/>;
+}
+
+// ── GEN AI CATALOG ─────────────────────────────────────────
+function CatalogModule({role,customerId}){
+  const [search,setSearch]=useState("");
+  const [selGroup,setSelGroup]=useState("All");
+  const [cart,setCart]=useState([]);
+  const [aiQuery,setAiQuery]=useState("");
+  const [aiLoading,setAiLoading]=useState(false);
+  const [aiResult,setAiResult]=useState("");
+  const [viewMode,setViewMode]=useState("grid");
+
+  const isAdmin=role==="Admin";
+  const myCatalog=isAdmin?MASTER_CATALOG:getCustomerCatalog(customerId);
+
+  const groups=["All",...Object.keys(PRODUCT_GROUPS)];
+  const filtered=myCatalog.filter(p=>{
+    const matchG=selGroup==="All"||p.group===selGroup;
+    const matchS=!search||p.name.toLowerCase().includes(search.toLowerCase())||p.sku.toLowerCase().includes(search.toLowerCase());
+    return matchG&&matchS;
+  });
+
+  async function askAI(){
+    if(!aiQuery.trim()||aiLoading)return;
+    setAiLoading(true);
+    const sys=`You are a parts catalog assistant for BridgeTech Manufacturing. 
+Available parts: ${JSON.stringify(myCatalog.map(p=>({sku:p.sku,name:p.name,group:p.group,price:p.price,stock:p.stock})))}
+Help the user find the right parts. Use markdown tables for comparisons. Keep responses concise.`;
+    const res=await callClaude([{role:"user",content:aiQuery}],sys,600);
+    setAiResult(res);setAiLoading(false);
+  }
+
+  function addCart(p){
+    setCart(c=>{const ex=c.find(x=>x.sku===p.sku);
+      if(ex)return c.map(x=>x.sku===p.sku?{...x,qty:x.qty+1}:x);
+      return [...c,{...p,qty:1}];
+    });
+  }
+
+  const total=cart.reduce((s,i)=>s+(i.qty>=i.bqty?i.bulk:i.price)*i.qty,0);
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>
+            {isAdmin?"Gen AI Product Catalog":"My Parts Catalog"}
+          </h2>
+          <p style={{fontSize:12.5,color:C.muted}}>
+            {isAdmin?"Master catalog · AI product group classification · Customer filtering"
+              :`${myCatalog.length} SKUs across ${[...new Set(myCatalog.map(p=>p.group))].length} product groups`}
+          </p>
+        </div>
+        {!isAdmin&&cart.length>0&&(
+          <div style={{background:C.primary,color:"#fff",borderRadius:10,padding:"8px 16px",fontSize:12.5,fontWeight:600}}>
+            🛒 {cart.length} items · ${total.toFixed(2)}
+          </div>
+        )}
+      </div>
+
+      {/* Product group tiles */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:16}}>
+        {Object.entries(PRODUCT_GROUPS).map(([g,info])=>{
+          const cnt=myCatalog.filter(p=>p.group===g).length;
+          const isAvail=cnt>0;
+          const isSel=selGroup===g;
+          return(
+            <div key={g} onClick={()=>isAvail&&setSelGroup(isSel?"All":g)}
+              style={{padding:"12px 10px",borderRadius:10,border:`2px solid ${isSel?info.color:isAvail?info.color+"30":"#eee"}`,
+                background:isSel?`${info.color}12`:isAvail?`${info.color}06`:"#fafafa",
+                cursor:isAvail?"pointer":"default",textAlign:"center",opacity:isAvail?1:0.4,transition:"all .14s"}}>
+              <div style={{fontSize:22,marginBottom:4}}>{info.icon}</div>
+              <div style={{fontSize:11.5,fontWeight:700,color:isSel?info.color:C.navy}}>{g}</div>
+              <div style={{fontSize:10,color:info.color,fontWeight:600}}>{cnt} SKU{cnt!==1?"s":""}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16}}>
+        <div>
+          {/* Search + filter bar */}
+          <div style={{display:"flex",gap:10,marginBottom:14,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 14px",alignItems:"center"}}>
+            <span style={{color:C.muted}}>🔍</span>
+            <input value={search} onChange={e=>setSearch(e.target.value)}
+              placeholder="Search by name or SKU..."
+              style={{flex:1,border:"none",outline:"none",fontSize:13,background:"transparent",color:C.text}}/>
+            <span style={{fontSize:11.5,color:C.muted}}>{filtered.length} parts</span>
+          </div>
+
+          {/* Parts grid */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
+            {filtered.map(p=>{
+              const grp=PRODUCT_GROUPS[p.group];
+              const inCart=cart.find(c=>c.sku===p.sku);
+              return(
+                <div key={p.sku} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",
+                  transition:"all .14s"}}
+                  onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 14px rgba(0,0,0,0.08)"}
+                  onMouseLeave={e=>e.currentTarget.style.boxShadow=""}>
+                  <div style={{height:4,background:grp.color}}/>
+                  <div style={{padding:"12px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                      <span style={{padding:"2px 7px",borderRadius:8,background:`${grp.color}14`,color:grp.color,fontSize:10,fontWeight:600}}>{p.group}</span>
+                      <span style={{fontSize:10,color:C.muted,fontFamily:"IBM Plex Mono"}}>{p.sku}</span>
+                    </div>
+                    <div style={{fontSize:13.5,fontWeight:700,color:C.navy,marginBottom:4,lineHeight:1.3}}>{p.name}</div>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{p.desc}</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div>
+                        <div style={{fontSize:16,fontWeight:800,color:C.primary,fontFamily:"IBM Plex Mono"}}>${p.price.toFixed(2)}</div>
+                        <div style={{fontSize:10,color:C.success}}>Bulk: ${p.bulk.toFixed(2)} ({p.bqty}+)</div>
+                      </div>
+                      <div style={{fontSize:10,color:p.stock<100?C.warn:C.success,fontWeight:600}}>{p.stock} in stock</div>
+                    </div>
+                    {!isAdmin&&(
+                      <button onClick={()=>addCart(p)}
+                        style={{width:"100%",padding:"7px",borderRadius:7,border:"none",
+                          background:inCart?C.success:C.primary,color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                        {inCart?`✓ In cart (${inCart.qty})`:"Add to order"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* AI sidebar */}
+        <div>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",marginBottom:14}}>
+            <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,background:C.primaryDim}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.navy}}>🤖 AI Parts Advisor</div>
+              <div style={{fontSize:10.5,color:C.muted}}>Ask about parts, compatibility, pricing</div>
+            </div>
+            <div style={{padding:"12px 14px"}}>
+              <textarea value={aiQuery} onChange={e=>setAiQuery(e.target.value)}
+                placeholder="e.g. What heating elements work for Whirlpool dryers?"
+                rows={3}
+                style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 11px",
+                  fontSize:12.5,resize:"none",outline:"none",background:C.bg,color:C.text,marginBottom:8}}/>
+              <button onClick={askAI} disabled={aiLoading||!aiQuery.trim()}
+                style={{width:"100%",padding:"8px",borderRadius:8,border:"none",
+                  background:aiLoading||!aiQuery.trim()?C.muted:C.primary,color:"#fff",
+                  fontSize:12.5,fontWeight:600,cursor:aiLoading?"wait":!aiQuery.trim()?"default":"pointer"}}>
+                {aiLoading?"Thinking...":"Ask AI Advisor"}
+              </button>
+            </div>
+            {aiResult&&(
+              <div style={{padding:"0 14px 14px"}}>
+                <div style={{padding:"10px 12px",background:C.bg,borderRadius:8,border:`1px solid ${C.border}`}}>
+                  <RichMessage text={aiResult} isUser={false}/>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Cart */}
+          {!isAdmin&&cart.length>0&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:10}}>Order Cart</div>
+              {cart.map(item=>(
+                <div key={item.sku} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  padding:"7px 0",borderBottom:`1px solid ${C.bg}`}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:600,color:C.navy,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                    <div style={{fontSize:10.5,color:C.muted}}>Qty: {item.qty} × ${(item.qty>=item.bqty?item.bulk:item.price).toFixed(2)}</div>
+                  </div>
+                  <span style={{fontSize:12,fontWeight:700,color:C.primary,marginLeft:8}}>${((item.qty>=item.bqty?item.bulk:item.price)*item.qty).toFixed(2)}</span>
+                </div>
+              ))}
+              <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 6px",fontWeight:700}}>
+                <span style={{color:C.navy}}>Total</span>
+                <span style={{color:C.primary,fontSize:15}}>${total.toFixed(2)}</span>
+              </div>
+              <button style={{width:"100%",padding:"9px",borderRadius:8,border:"none",background:C.primary,color:"#fff",fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                Submit Order →
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CUSTOMER REGISTRY (Admin) ───────────────────────────────
+function CustomerRegistry(){
+  const [customers,setCustomers]=useState([...INIT_CUSTOMERS]);
+  const [sel,setSel]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [newSku,setNewSku]=useState("");
+  const typeColor={"B2B Buyer":C.accent,"Dealer":C.success};
+
+  function toggleGroup(custId,group){
+    setCustomers(cs=>cs.map(c=>{
+      if(c.id!==custId)return c;
+      const has=c.allowedGroups.includes(group);
+      return {...c,allowedGroups:has?c.allowedGroups.filter(g=>g!==group):[...c.allowedGroups,group]};
+    }));
+    if(sel?.id===custId)setSel(c=>({...c,allowedGroups:c.allowedGroups.includes(group)?c.allowedGroups.filter(g=>g!==group):[...c.allowedGroups,group]}));
+  }
+
+  function addSkuToCustomer(custId){
+    if(!newSku.trim())return;
+    const sku=newSku.trim().toUpperCase();
+    if(!MASTER_CATALOG.find(p=>p.sku===sku)){alert("SKU not found in master catalog");return;}
+    setCustomers(cs=>cs.map(c=>c.id===custId?{...c,allowedSkus:[...new Set([...c.allowedSkus,sku])]}:c));
+    if(sel?.id===custId)setSel(c=>({...c,allowedSkus:[...new Set([...c.allowedSkus,sku])]}));
+    setNewSku("");
+  }
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Customer Registry</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Manage customer IDs · Assign product groups · Add SKUs to customer catalog</p>
+        </div>
+        <button onClick={()=>setShowAdd(true)}
+          style={{padding:"8px 18px",borderRadius:9,border:"none",background:C.primary,color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer"}}>
+          + Add Customer
+        </button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"320px 1fr",gap:16}}>
+        {/* Customer list */}
+        <div>
+          {customers.map(c=>{
+            const myCat=getCustomerCatalog(c.id,customers);
+            const isSel=sel?.id===c.id;
+            return(
+              <div key={c.id} onClick={()=>setSel(isSel?null:c)}
+                style={{background:C.surface,border:`2px solid ${isSel?(typeColor[c.type]||C.primary):C.border}`,
+                  borderRadius:12,padding:"14px 16px",marginBottom:10,cursor:"pointer",transition:"all .14s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                  <div>
+                    <div style={{fontSize:13.5,fontWeight:700,color:isSel?(typeColor[c.type]||C.primary):C.navy}}>{c.name}</div>
+                    <div style={{fontSize:10.5,fontFamily:"IBM Plex Mono",color:C.muted}}>{c.id}</div>
+                  </div>
+                  <span style={{padding:"2px 8px",borderRadius:10,background:`${typeColor[c.type]||C.primary}15`,
+                    color:typeColor[c.type]||C.primary,fontSize:10.5,fontWeight:600}}>{c.type}</span>
+                </div>
+                <div style={{fontSize:11,color:C.muted}}>
+                  {c.allowedGroups.length} groups · {myCat.length} SKUs · ${(c.spend/1000).toFixed(0)}K spend
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Customer detail editor */}
+        <div>
+          {!sel?(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:40,textAlign:"center"}}>
+              <div style={{fontSize:36,marginBottom:12}}>🏢</div>
+              <div style={{fontSize:15,fontWeight:700,color:C.navy,marginBottom:6}}>Select a customer</div>
+              <div style={{fontSize:13,color:C.muted}}>Click a customer to manage their product group access and catalog SKUs</div>
+            </div>
+          ):(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,background:C.primaryDim}}>
+                <div style={{fontSize:15,fontWeight:700,color:C.navy}}>{sel.name}</div>
+                <div style={{fontSize:11.5,color:C.muted}}>{sel.id} · {sel.type} · {sel.contact}</div>
+              </div>
+              <div style={{padding:"18px 20px"}}>
+                <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Allowed product groups</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:9,marginBottom:20}}>
+                  {Object.entries(PRODUCT_GROUPS).map(([g,info])=>{
+                    const has=sel.allowedGroups.includes(g);
+                    return(
+                      <div key={g} onClick={()=>toggleGroup(sel.id,g)}
+                        style={{padding:"10px 12px",borderRadius:9,border:`2px solid ${has?info.color:C.border}`,
+                          background:has?`${info.color}10`:C.surface,cursor:"pointer",transition:"all .12s"}}>
+                        <div style={{fontSize:18,marginBottom:3}}>{info.icon}</div>
+                        <div style={{fontSize:12,fontWeight:700,color:has?info.color:C.navy}}>{g}</div>
+                        <div style={{fontSize:10,color:has?info.color:C.muted}}>{has?"✓ Enabled":"Click to enable"}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:10}}>Add specific SKUs to catalog</div>
+                <div style={{display:"flex",gap:8,marginBottom:12}}>
+                  <input value={newSku} onChange={e=>setNewSku(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&addSkuToCustomer(sel.id)}
+                    placeholder="Enter SKU (e.g. APM-HTR-001)"
+                    style={{flex:1,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontFamily:"IBM Plex Mono",outline:"none"}}/>
+                  <button onClick={()=>addSkuToCustomer(sel.id)}
+                    style={{padding:"8px 16px",borderRadius:8,border:"none",background:C.primary,color:"#fff",fontSize:12.5,fontWeight:600,cursor:"pointer"}}>
+                    Add SKU
+                  </button>
+                </div>
+                {sel.allowedSkus.length>0&&(
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {sel.allowedSkus.map(sku=>(
+                      <span key={sku} style={{padding:"3px 9px",borderRadius:10,background:C.primaryDim,
+                        color:C.primary,fontSize:11,fontWeight:600,fontFamily:"IBM Plex Mono"}}>{sku}</span>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{marginTop:20,padding:"12px 14px",background:C.bg,borderRadius:9}}>
+                  <div style={{fontSize:11.5,fontWeight:600,color:C.navy,marginBottom:6}}>Effective catalog for this customer</div>
+                  <div style={{fontSize:11,color:C.muted}}>
+                    {getCustomerCatalog(sel.id,customers).map(p=>p.sku).join(" · ")||"No SKUs assigned"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── UNIVERSAL API MONITOR (Admin) ──────────────────────────
+function APIMonitor(){
+  const METHODS=["POST","GET","PUT"];
+  const PATHS=["/api/catalog","/api/order","/api/track","/api/incoming","/api/webhook"];
+  const CHANS=["B2B Buyer","Dealer","B2P Portal","Marketplace"];
+  const STATS=[200,200,200,201,422,500];
+  const [reqs,setReqs]=useState(()=>Array.from({length:15},()=>({
+    id:`REQ-${Math.floor(Math.random()*9000)+1000}`,
+    method:["POST","GET","GET"][Math.floor(Math.random()*3)],
+    path:PATHS[Math.floor(Math.random()*PATHS.length)],
+    channel:CHANS[Math.floor(Math.random()*CHANS.length)],
+    status:STATS[Math.floor(Math.random()*STATS.length)],
+    lat:Math.floor(80+Math.random()*400),
+    ts:new Date().toLocaleTimeString(),
+    routed:OMS_SYSTEMS[Math.floor(Math.random()*3)].name,
+  })));
+  const [paused,setPaused]=useState(false);
+  const [sel,setSel]=useState(null);
+  useEffect(()=>{
+    if(paused)return;
+    const t=setInterval(()=>{
+      setReqs(r=>[{
+        id:`REQ-${Math.floor(Math.random()*9000)+1000}`,
+        method:["POST","GET","GET"][Math.floor(Math.random()*3)],
+        path:PATHS[Math.floor(Math.random()*PATHS.length)],
+        channel:CHANS[Math.floor(Math.random()*CHANS.length)],
+        status:STATS[Math.floor(Math.random()*STATS.length)],
+        lat:Math.floor(80+Math.random()*400),
+        ts:new Date().toLocaleTimeString(),
+        routed:OMS_SYSTEMS[Math.floor(Math.random()*3)].name,
+      },...r.slice(0,99)]);
+    },2400);
+    return()=>clearInterval(t);
+  },[paused]);
+  const sc=s=>s<300?"#22C55E":s<500?"#F59E0B":"#EF4444";
+  const errCount=reqs.filter(r=>r.status>=400).length;
+  const avgLat=Math.round(reqs.reduce((s,r)=>s+r.lat,0)/reqs.length);
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Universal API Monitor</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Live traffic · /catalog · /order · /track · All channels</p>
+        </div>
+        <button onClick={()=>setPaused(p=>!p)}
+          style={{padding:"7px 16px",borderRadius:8,border:`1px solid ${C.border}`,
+            background:paused?"#22C55E20":C.surface,color:paused?"#22C55E":C.muted,fontSize:12.5,fontWeight:600,cursor:"pointer"}}>
+          {paused?"▶ Resume":"⏸ Pause"}
+        </button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        {[
+          {l:"Total",v:reqs.length,c:C.primary},
+          {l:"Errors",v:errCount,c:errCount>5?C.danger:C.warn},
+          {l:"Avg Latency",v:avgLat+"ms",c:avgLat>300?C.warn:C.success},
+          {l:"Success Rate",v:((1-errCount/reqs.length)*100).toFixed(1)+"%",c:C.success},
+        ].map((s,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",textAlign:"center"}}>
+            <div style={{fontSize:20,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+            <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 280px",gap:14}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {["Method + Path","Channel","Status","Latency","Routed To","Time"].map(h=>(
+                  <th key={h} style={{padding:"9px 12px",textAlign:"left",fontSize:10.5,color:C.muted,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {reqs.slice(0,20).map((r,i)=>(
+                <tr key={i} onClick={()=>setSel(r)}
+                  style={{borderTop:`1px solid ${C.border}`,cursor:"pointer",
+                    background:sel?.id===r.id?C.primaryDim:"transparent",transition:"background .1s"}}
+                  onMouseEnter={e=>!sel&&(e.currentTarget.style.background=C.bg)}
+                  onMouseLeave={e=>!sel&&(e.currentTarget.style.background="")}>
+                  <td style={{padding:"8px 12px"}}>
+                    <span style={{padding:"2px 6px",borderRadius:5,background:r.method==="GET"?C.blueDim:C.accentDim,
+                      color:r.method==="GET"?C.blue:C.accent,fontSize:10.5,fontWeight:700,marginRight:6}}>{r.method}</span>
+                    <code style={{fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{r.path}</code>
+                  </td>
+                  <td style={{padding:"8px 12px",fontSize:12,color:C.text}}>{r.channel}</td>
+                  <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontWeight:700,color:sc(r.status),fontSize:12}}>{r.status}</td>
+                  <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:12,color:r.lat>300?C.warn:C.text}}>{r.lat}ms</td>
+                  <td style={{padding:"8px 12px",fontSize:11,color:C.muted}}>{r.routed}</td>
+                  <td style={{padding:"8px 12px",fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{r.ts}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
+          {sel?(
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Request Detail</div>
+              {[["Method",sel.method],["Path",sel.path],["Channel",sel.channel],["Status",sel.status],["Latency",sel.lat+"ms"],["Routed To",sel.routed],["Time",sel.ts]].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${C.bg}`}}>
+                  <span style={{fontSize:11,color:C.muted}}>{k}</span>
+                  <span style={{fontSize:11.5,fontWeight:600,color:C.navy,fontFamily:"IBM Plex Mono"}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          ):(
+            <div style={{textAlign:"center",padding:"30px 0",color:C.muted}}>
+              <div style={{fontSize:28,marginBottom:8}}>👆</div>
+              <div style={{fontSize:12.5}}>Click a request to see details</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ORDER LISTENER (Admin) ──────────────────────────────────
+function OrderListener(){
+  const [events,setEvents]=useState(()=>Array.from({length:8},(_,i)=>({
+    id:`EVT-${1000+i}`,
+    portal:MARKETPLACE_PORTALS[i%4].name,
+    type:["webhook","poll","webhook","poll"][i%4],
+    orderId:`ORD-${8800+i}`,
+    buyer:["Marriott","McDonald's","Wyndham","Holiday Inn"][i%4],
+    amount:Math.floor(200+Math.random()*2000),
+    status:["received","normalised","routed","confirmed"][Math.min(i,3)],
+    omsTarget:OMS_SYSTEMS[i%3].name,
+    ts:new Date(Date.now()-i*90000).toLocaleTimeString(),
+  })));
+  const [paused,setPaused]=useState(false);
+  useEffect(()=>{
+    if(paused)return;
+    const t=setInterval(()=>{
+      const portal=MARKETPLACE_PORTALS[Math.floor(Math.random()*4)];
+      setEvents(e=>[{
+        id:`EVT-${Math.floor(Math.random()*9000)+1000}`,
+        portal:portal.name,
+        type:["webhook","poll"][Math.floor(Math.random()*2)],
+        orderId:`ORD-${Math.floor(Math.random()*9000)+8000}`,
+        buyer:["Marriott","McDonald's","Wyndham","Holiday Inn"][Math.floor(Math.random()*4)],
+        amount:Math.floor(200+Math.random()*2000),
+        status:rnd(["received","normalised","routed","confirmed"]),
+        omsTarget:OMS_SYSTEMS[Math.floor(Math.random()*3)].name,
+        ts:new Date().toLocaleTimeString(),
+      },...e.slice(0,49)]);
+    },3500);
+    return()=>clearInterval(t);
+  },[paused]);
+  const stColor={"received":C.blue,"normalised":C.accent,"routed":C.warn,"confirmed":C.success};
+  const stepFlow=["received","normalised","routed","confirmed"];
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Order Listener</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Marketplace webhook & poll service · SAP Ariba · ServiceNow · Grainger · Amazon</p>
+        </div>
+        <button onClick={()=>setPaused(p=>!p)}
+          style={{padding:"7px 16px",borderRadius:8,border:`1px solid ${C.border}`,
+            background:paused?"#22C55E20":C.surface,color:paused?"#22C55E":C.muted,fontSize:12.5,fontWeight:600,cursor:"pointer"}}>
+          {paused?"▶ Resume":"⏸ Pause"}
+        </button>
+      </div>
+
+      {/* Marketplace status */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        {MARKETPLACE_PORTALS.map(p=>(
+          <div key={p.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:11,padding:"12px 14px",
+            borderLeft:`4px solid ${p.color}`}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:4}}>{p.name}</div>
+            <div style={{display:"flex",gap:4,marginBottom:4}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:C.success,display:"inline-block",marginTop:1}}/>
+              <span style={{fontSize:11,color:C.success,fontWeight:600}}>Active</span>
+            </div>
+            <div style={{fontSize:11,color:C.muted}}>{p.ordersToday} orders today · {p.lastSync}</div>
+            <div style={{fontSize:10,color:C.muted}}>Poll: {p.pollInterval}s</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Event flow pipeline */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 20px",marginBottom:14}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:14}}>Event Pipeline</div>
+        <div style={{display:"flex",gap:0,marginBottom:4}}>
+          {stepFlow.map((s,i)=>(
+            <div key={s} style={{flex:1,display:"flex",alignItems:"center"}}>
+              <div style={{flex:1,padding:"10px 12px",borderRadius:i===0?"8px 0 0 8px":i===3?"0 8px 8px 0":"0",
+                background:`${stColor[s]}18`,border:`1px solid ${stColor[s]}30`,textAlign:"center"}}>
+                <div style={{fontSize:11.5,fontWeight:700,color:stColor[s],textTransform:"capitalize"}}>{s}</div>
+                <div style={{fontSize:18,fontWeight:800,color:stColor[s],fontFamily:"IBM Plex Mono"}}>
+                  {events.filter(e=>e.status===s).length}
+                </div>
+              </div>
+              {i<3&&<div style={{width:20,height:2,background:C.border,flexShrink:0}}/>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Live event log */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+        <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Live Event Log</span>
+          <span style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.success,fontWeight:600}}>
+            {!paused&&<span style={{width:6,height:6,borderRadius:"50%",background:C.success,animation:"pulse 1.5s infinite",display:"inline-block"}}/>}
+            {paused?"Paused":"Live"}
+          </span>
+        </div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead>
+            <tr style={{background:C.bg}}>
+              {["Event ID","Portal","Type","Order","Buyer","Amount","Status","OMS Target","Time"].map(h=>(
+                <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:10.5,color:C.muted,fontWeight:600}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {events.slice(0,18).map((e,i)=>(
+              <tr key={i} style={{borderTop:`1px solid ${C.border}`}}>
+                <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:11,color:C.muted}}>{e.id}</td>
+                <td style={{padding:"8px 12px",fontSize:12,color:C.navy,fontWeight:500}}>{e.portal}</td>
+                <td style={{padding:"8px 12px"}}><span style={{padding:"2px 6px",borderRadius:8,background:C.bg,fontSize:10.5}}>{e.type}</span></td>
+                <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:11,color:C.primary}}>{e.orderId}</td>
+                <td style={{padding:"8px 12px",fontSize:12}}>{e.buyer}</td>
+                <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontWeight:600,color:C.navy}}>${e.amount}</td>
+                <td style={{padding:"8px 12px"}}>
+                  <span style={{padding:"2px 8px",borderRadius:10,background:`${stColor[e.status]}18`,color:stColor[e.status],fontSize:10.5,fontWeight:600,textTransform:"capitalize"}}>{e.status}</span>
+                </td>
+                <td style={{padding:"8px 12px",fontSize:11,color:C.muted}}>{e.omsTarget}</td>
+                <td style={{padding:"8px 12px",fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{e.ts}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── AI ROUTING MONITOR (Admin) ──────────────────────────────
+function AIRoutingMonitor(){
+  const [decisions,setDecisions]=useState(()=>Array.from({length:10},(_,i)=>{
+    const conf=60+Math.floor(Math.random()*38);
+    const oms=OMS_SYSTEMS[Math.floor(Math.random()*3)];
+    const fallback=OMS_SYSTEMS.find(o=>o.id!==oms.id&&o.id!=="SAP")||OMS_SYSTEMS[2];
+    return{
+      id:`DEC-${1000+i}`,
+      orderId:`ORD-${8800+i}`,
+      channel:["B2B Buyer","Marketplace","Dealer"][i%3],
+      confidence:conf,
+      target:oms.name,
+      targetColor:oms.color,
+      fallback:fallback.name,
+      reason:["Bulk order >50 units + B2B account","Hotel chain account in MS Dynamics","High urgency + warehouse stock available","Low confidence escalated to review","Compressor SKU → SAP ERP fulfilment"][i%5],
+      status:conf>=90?"auto-routed":conf>=70?"auto-routed":"review",
+      ragSources:["routing_rules.json","customer_profiles.json","order_history.db"].slice(0,1+Math.floor(Math.random()*3)),
+      vectorScore:(0.82+Math.random()*0.16).toFixed(3),
+      ts:new Date(Date.now()-i*75000).toLocaleTimeString(),
+    };
+  }));
+  const [paused,setPaused]=useState(false);
+  const [sel,setSel]=useState(null);
+  useEffect(()=>{
+    if(paused)return;
+    const t=setInterval(()=>{
+      const conf=60+Math.floor(Math.random()*38);
+      const oms=OMS_SYSTEMS[Math.floor(Math.random()*3)];
+      setDecisions(d=>[{
+        id:`DEC-${Math.floor(Math.random()*9000)+1000}`,
+        orderId:`ORD-${Math.floor(Math.random()*9000)+8000}`,
+        channel:["B2B Buyer","Marketplace","Dealer"][Math.floor(Math.random()*3)],
+        confidence:conf,target:oms.name,targetColor:oms.color,
+        fallback:OMS_SYSTEMS.find(o=>o.id!==oms.id)||OMS_SYSTEMS[2],
+        reason:["Bulk order → SAP ERP","B2B hotel account → MS Dynamics","Urgency flag → WMS dispatch","Low confidence → review queue"][Math.floor(Math.random()*4)],
+        status:conf>=90?"auto-routed":conf>=70?"auto-routed":"review",
+        ragSources:["routing_rules.json","customer_profiles.json"].slice(0,1+Math.floor(Math.random()*2)),
+        vectorScore:(0.82+Math.random()*0.16).toFixed(3),
+        ts:new Date().toLocaleTimeString(),
+      },...d.slice(0,49)]);
+    },3200);
+    return()=>clearInterval(t);
+  },[paused]);
+
+  const autoRouted=decisions.filter(d=>d.status==="auto-routed").length;
+  const reviews=decisions.filter(d=>d.status==="review").length;
+  const avgConf=(decisions.reduce((s,d)=>s+d.confidence,0)/decisions.length).toFixed(1);
+  const confColor=c=>c>=90?C.success:c>=70?C.accent:C.warn;
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>AI Routing Monitor</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Vector + RAG + LLM routing decisions · Confidence scores · OMS targets</p>
+        </div>
+        <button onClick={()=>setPaused(p=>!p)}
+          style={{padding:"7px 16px",borderRadius:8,border:`1px solid ${C.border}`,
+            background:paused?"#22C55E20":C.surface,color:paused?"#22C55E":C.muted,fontSize:12.5,fontWeight:600,cursor:"pointer"}}>
+          {paused?"▶ Resume":"⏸ Pause"}
+        </button>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        {[
+          {l:"Auto-Routed",v:autoRouted,c:C.success,sub:"No human needed"},
+          {l:"Review Queue",v:reviews,c:C.warn,sub:"Confidence < 70%"},
+          {l:"Avg Confidence",v:avgConf+"%",c:C.primary,sub:"LLM certainty score"},
+          {l:"RAG Sources",v:"3",c:"#534AB7",sub:"Rules + history + catalog"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:11,padding:"14px 16px",borderTop:`3px solid ${s.c}`}}>
+            <div style={{fontSize:21,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono",marginBottom:3}}>{s.v}</div>
+            <div style={{fontSize:11.5,fontWeight:600,color:C.navy,marginBottom:2}}>{s.l}</div>
+            <div style={{fontSize:11,color:C.muted}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {["Decision","Order","Channel","Confidence","Target OMS","Vector Score","Status","Time"].map(h=>(
+                  <th key={h} style={{padding:"9px 12px",textAlign:"left",fontSize:10.5,color:C.muted,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {decisions.slice(0,18).map((d,i)=>(
+                <tr key={i} onClick={()=>setSel(d)}
+                  style={{borderTop:`1px solid ${C.border}`,cursor:"pointer",
+                    background:sel?.id===d.id?C.primaryDim:"transparent",transition:"background .1s"}}
+                  onMouseEnter={e=>!sel&&(e.currentTarget.style.background=C.bg)}
+                  onMouseLeave={e=>!sel&&(e.currentTarget.style.background="")}>
+                  <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:11,color:C.muted}}>{d.id}</td>
+                  <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:11,color:C.primary}}>{d.orderId}</td>
+                  <td style={{padding:"8px 12px",fontSize:11.5}}>{d.channel}</td>
+                  <td style={{padding:"8px 12px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{width:40,height:5,background:C.bg,borderRadius:3,overflow:"hidden"}}>
+                        <div style={{height:"100%",borderRadius:3,background:confColor(d.confidence),width:d.confidence+"%"}}/>
+                      </div>
+                      <span style={{fontSize:11.5,fontWeight:700,color:confColor(d.confidence),fontFamily:"IBM Plex Mono"}}>{d.confidence}%</span>
+                    </div>
+                  </td>
+                  <td style={{padding:"8px 12px"}}>
+                    <span style={{padding:"2px 8px",borderRadius:9,background:`${d.targetColor}18`,color:d.targetColor,fontSize:10.5,fontWeight:600}}>{d.target}</span>
+                  </td>
+                  <td style={{padding:"8px 12px",fontFamily:"IBM Plex Mono",fontSize:11,color:C.muted}}>{d.vectorScore}</td>
+                  <td style={{padding:"8px 12px"}}>
+                    <span style={{padding:"2px 8px",borderRadius:9,fontSize:10.5,fontWeight:600,
+                      background:d.status==="auto-routed"?C.success+"18":C.warn+"18",
+                      color:d.status==="auto-routed"?C.success:C.warn}}>{d.status}</span>
+                  </td>
+                  <td style={{padding:"8px 12px",fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{d.ts}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px"}}>
+          {sel?(
+            <div className="fadeUp">
+              <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Decision Detail</div>
+              <div style={{padding:"10px 12px",background:`${sel.targetColor}10`,borderRadius:9,border:`1px solid ${sel.targetColor}30`,marginBottom:12}}>
+                <div style={{fontSize:10.5,color:sel.targetColor,fontWeight:700,marginBottom:2}}>ROUTING DECISION</div>
+                <div style={{fontSize:14,fontWeight:800,color:C.navy}}>{sel.target}</div>
+                <div style={{fontSize:11,color:C.muted}}>Fallback: {typeof sel.fallback==="object"?sel.fallback.name:sel.fallback}</div>
+              </div>
+              <div style={{fontSize:12,fontWeight:600,color:C.navy,marginBottom:6}}>LLM Reasoning</div>
+              <div style={{fontSize:11.5,color:C.text,lineHeight:1.6,background:C.bg,borderRadius:8,padding:"10px",marginBottom:12}}>{sel.reason}</div>
+              <div style={{fontSize:12,fontWeight:600,color:C.navy,marginBottom:6}}>RAG Sources Retrieved</div>
+              {sel.ragSources.map((s,i)=>(
+                <div key={i} style={{padding:"5px 9px",background:C.primaryDim,borderRadius:6,marginBottom:4,fontSize:11,fontFamily:"IBM Plex Mono",color:C.primary}}>{s}</div>
+              ))}
+              <div style={{marginTop:12,display:"flex",justifyContent:"space-between",fontSize:11,color:C.muted}}>
+                <span>Vector similarity: {sel.vectorScore}</span>
+                <span>Confidence: {sel.confidence}%</span>
+              </div>
+            </div>
+          ):(
+            <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
+              <div style={{fontSize:32,marginBottom:10}}>🧠</div>
+              <div style={{fontSize:13}}>Click a decision to inspect the AI reasoning</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── OMS REGISTRY (Admin) ────────────────────────────────────
+function OMSRegistry(){
+  const [systems,setSystems]=useState([...OMS_SYSTEMS]);
+  const [testResult,setTestResult]=useState({});
+  async function testConn(id){
+    setTestResult(r=>({...r,[id]:"testing"}));
+    await new Promise(r=>setTimeout(r,1800));
+    setTestResult(r=>({...r,[id]:"ok"}));
+  }
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:18}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>OMS Registry</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Configure the 3 legacy systems · The AI routing engine dispatches orders here</p>
+      </div>
+
+      {/* Architecture diagram */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 22px",marginBottom:16}}>
+        <div style={{fontSize:12.5,fontWeight:700,color:C.navy,marginBottom:14}}>Order routing architecture</div>
+        <div style={{display:"flex",alignItems:"center",gap:0}}>
+          <div style={{padding:"10px 16px",background:C.primaryDim,borderRadius:8,textAlign:"center",minWidth:120}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.primary}}>Universal Bridge API</div>
+            <div style={{fontSize:10.5,color:C.muted}}>Normalised order</div>
+          </div>
+          <div style={{height:2,flex:1,background:C.border,position:"relative"}}>
+            <div style={{position:"absolute",top:-16,left:"50%",transform:"translateX(-50%)",fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>AI routes here ↓</div>
+          </div>
+          <div style={{padding:"10px 14px",background:`#534AB718`,border:`1px solid #534AB740`,borderRadius:8,textAlign:"center",minWidth:120}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#534AB7"}}>AI Agent</div>
+            <div style={{fontSize:10.5,color:C.muted}}>Vector+RAG+LLM</div>
+          </div>
+          <div style={{height:2,flex:1,background:C.border}}/>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {systems.map(s=>(
+              <div key={s.id} style={{padding:"6px 12px",background:`${s.color}14`,border:`1px solid ${s.color}30`,borderRadius:6,minWidth:110}}>
+                <div style={{fontSize:11.5,fontWeight:700,color:s.color}}>{s.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {systems.map(s=>{
+          const tRes=testResult[s.id];
+          return(
+            <div key={s.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:13,
+              borderLeft:`5px solid ${s.color}`,overflow:"hidden"}}>
+              <div style={{padding:"18px 22px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                      <span style={{fontSize:16,fontWeight:800,color:C.navy}}>{s.name}</span>
+                      <span style={{width:8,height:8,borderRadius:"50%",background:C.success,display:"inline-block"}}/>
+                      <span style={{fontSize:11.5,color:C.success,fontWeight:600}}>Connected</span>
+                    </div>
+                    <div style={{fontSize:12,color:C.muted}}>{s.desc}</div>
+                  </div>
+                  <button onClick={()=>testConn(s.id)}
+                    style={{padding:"7px 16px",borderRadius:8,border:`1px solid ${s.color}40`,
+                      background:`${s.color}10`,color:s.color,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                    {tRes==="testing"?"Testing...":tRes==="ok"?"✓ Connected":"Test Connection"}
+                  </button>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:12}}>
+                  {[
+                    {l:"Endpoint",v:s.endpoint},
+                    {l:"Auth",v:s.auth},
+                    {l:"Avg Latency",v:s.latency+"ms"},
+                    {l:"Handles",v:s.handles.join(", ")},
+                  ].map((f,i)=>(
+                    <div key={i} style={{padding:"9px 12px",background:C.bg,borderRadius:8}}>
+                      <div style={{fontSize:10.5,color:C.muted,marginBottom:3}}>{f.l}</div>
+                      <div style={{fontSize:11.5,fontWeight:600,color:C.navy,fontFamily:i<2?"IBM Plex Mono":undefined,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{fontSize:12,fontWeight:600,color:C.navy,marginBottom:8}}>AI routing triggers this system when:</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {s.handles.map(h=>(
+                    <span key={h} style={{padding:"3px 9px",borderRadius:10,background:`${s.color}12`,color:s.color,fontSize:11,fontWeight:600}}>{h.replace(/_/g," ")}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── API SERVICE SETUP (B2B Buyer / Dealer) ──────────────────
+function APIServiceSetup({role,customerId}){
+  const cust=INIT_CUSTOMERS.find(c=>c.id===customerId)||INIT_CUSTOMERS[0];
+  const myCatalog=getCustomerCatalog(customerId);
+  const [step,setStep]=useState(1);
+  const [schema,setSchema]=useState("");
+  const [bridging,setBridging]=useState(false);
+  const [bridged,setBridged]=useState(false);
+  const [apiKey]=useState("btk-"+Math.random().toString(36).slice(2,18));
+  const isDealer=role==="Dealer";
+
+  async function runBridge(){
+    setBridging(true);
+    await new Promise(r=>setTimeout(r,3200));
+    setBridging(false);setBridged(true);setStep(3);
+  }
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:18}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>API Service Setup</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Connect your {role==="B2B Buyer"?"ERP or procurement system":"store management system"} to BridgeTech Universal API · 3 steps</p>
+      </div>
+
+      {/* Progress */}
+      <div style={{display:"flex",alignItems:"center",gap:0,marginBottom:24}}>
+        {[{n:1,l:"Upload schema"},{n:2,l:"AI maps fields"},{n:3,l:"Go live"}].map((s,i)=>(
+          <div key={s.n} style={{display:"flex",alignItems:"center",flex:i<2?1:"auto"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:28,height:28,borderRadius:"50%",
+                background:step>=s.n?C.primary:C.border,color:step>=s.n?"#fff":C.muted,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{s.n}</div>
+              <span style={{fontSize:12.5,fontWeight:step===s.n?700:400,color:step>=s.n?C.navy:C.muted}}>{s.l}</span>
+            </div>
+            {i<2&&<div style={{flex:1,height:2,background:step>s.n?C.primary:C.border,margin:"0 12px"}}/>}
+          </div>
+        ))}
+      </div>
+
+      {step===1&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:14}}>Step 1 — Upload your API schema</div>
+            <p style={{fontSize:12.5,color:C.muted,lineHeight:1.6,marginBottom:14}}>
+              Paste a sample JSON request body from your {isDealer?"inventory/order system":"ERP or procurement portal"}.
+              Our AI agent will parse every field, data type, and structure automatically.
+            </p>
+            <textarea value={schema} onChange={e=>setSchema(e.target.value)}
+              placeholder='{ "order_id": "string", "items": [...], "delivery": {...} }' 
+              rows={10}
+              style={{width:"100%",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 14px",
+                fontSize:12,fontFamily:"IBM Plex Mono",color:C.text,resize:"vertical",outline:"none",marginBottom:12}}/>
+            <button onClick={()=>schema.trim()&&setStep(2)}
+              style={{width:"100%",padding:"10px",borderRadius:9,border:"none",
+                background:schema.trim()?C.primary:C.muted,color:"#fff",fontSize:13,fontWeight:700,cursor:schema.trim()?"pointer":"default"}}>
+              Analyse Schema →
+            </button>
+          </div>
+          <div style={{background:`linear-gradient(135deg,${C.primaryDim},${C.accentDim})`,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>BridgeTech Universal API endpoints</div>
+            {[
+              {method:"GET",path:"/api/catalog",desc:`Returns ${myCatalog.length} SKUs filtered for ${cust.name}`,badge:"catalog"},
+              {method:"POST",path:"/api/order",desc:"Submit an order · AI routes to correct OMS system",badge:"order"},
+              {method:"GET",path:"/api/track/{id}",desc:"Real-time order status from OMS system",badge:"track"},
+            ].map((ep,i)=>(
+              <div key={i} style={{padding:"10px 12px",background:C.surface,borderRadius:9,marginBottom:9}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <span style={{padding:"2px 7px",borderRadius:6,background:ep.method==="GET"?C.blueDim:C.accentDim,
+                    color:ep.method==="GET"?C.blue:C.accent,fontSize:10.5,fontWeight:700}}>{ep.method}</span>
+                  <code style={{fontSize:12,fontFamily:"IBM Plex Mono",color:C.navy}}>{ep.path}</code>
+                </div>
+                <div style={{fontSize:11,color:C.muted}}>{ep.desc}</div>
+              </div>
+            ))}
+            <div style={{marginTop:10,padding:"9px 12px",background:C.surface,borderRadius:9}}>
+              <div style={{fontSize:10.5,color:C.muted,marginBottom:2}}>Base URL</div>
+              <code style={{fontSize:12,fontFamily:"IBM Plex Mono",color:C.primary}}>https://api.bridgetech-hub.io</code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {step===2&&(
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"24px 28px"}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.navy,marginBottom:12}}>Step 2 — AI Schema Bridge agent</div>
+          {!bridging&&!bridged&&(
+            <>
+              <div style={{padding:"12px 16px",background:C.accentDim,borderRadius:10,marginBottom:16,fontSize:12.5,color:C.navy,lineHeight:1.6}}>
+                Schema received and parsed. The AI agent will now cross-reference your fields against BridgeTech's target schema, identify mismatches, and generate transformation rules automatically. No development needed on your side.
+              </div>
+              <button onClick={runBridge}
+                style={{padding:"11px 28px",borderRadius:10,border:"none",background:C.primary,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                🧠 Run AI Bridge Agent →
+              </button>
+            </>
+          )}
+          {bridging&&(
+            <div style={{textAlign:"center",padding:"40px"}}>
+              <div style={{width:48,height:48,borderRadius:"50%",border:`4px solid ${C.border}`,borderTopColor:C.primary,
+                animation:"spin 1s linear infinite",margin:"0 auto 16px"}}/>
+              <div style={{fontSize:14,fontWeight:600,color:C.navy,marginBottom:6}}>AI agent analysing schema...</div>
+              <div style={{fontSize:12,color:C.muted}}>Detecting field mismatches · Generating transformation rules · Compiling bridge</div>
+            </div>
+          )}
+          {bridged&&(
+            <div style={{textAlign:"center",padding:"20px"}}>
+              <div style={{fontSize:40,marginBottom:12}}>✅</div>
+              <div style={{fontSize:15,fontWeight:700,color:C.success,marginBottom:4}}>Bridge compiled — 12 field mappings ready</div>
+              <button onClick={()=>setStep(3)}
+                style={{marginTop:16,padding:"10px 24px",borderRadius:10,border:"none",background:C.success,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                Activate Service →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {step===3&&(
+        <div style={{background:C.surface,border:`2px solid ${C.success}50`,borderRadius:12,padding:"28px 32px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:22}}>
+            <div style={{width:52,height:52,borderRadius:14,background:`${C.success}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🎉</div>
+            <div>
+              <div style={{fontSize:17,fontWeight:800,color:C.success,marginBottom:3}}>API Service Active — You're Live</div>
+              <div style={{fontSize:12.5,color:C.muted}}>Your {role} integration is production-ready. Use the credentials below.</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
+            {[
+              {l:"API Key",v:apiKey,mono:true},
+              {l:"Customer ID",v:cust.id,mono:true},
+              {l:"Base URL",v:"https://api.bridgetech-hub.io",mono:true},
+              {l:"Catalog SKUs",v:myCatalog.length+" SKUs available",mono:false},
+            ].map((f,i)=>(
+              <div key={i} style={{padding:"12px 14px",background:C.bg,borderRadius:9,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:10.5,color:C.muted,marginBottom:4}}>{f.l}</div>
+                <div style={{fontSize:12,fontWeight:600,color:C.navy,fontFamily:f.mono?"IBM Plex Mono":undefined,wordBreak:"break-all"}}>{f.v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.navy,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",marginBottom:8}}>Example — fetch your catalog</div>
+            <pre style={{margin:0,fontSize:11.5,fontFamily:"IBM Plex Mono",color:C.accent,lineHeight:1.7}}>{`GET https://api.bridgetech-hub.io/api/catalog
+Authorization: Bearer ${apiKey}
+X-Customer-ID: ${cust.id}
+
+// Returns ${myCatalog.length} SKUs in your configured schema`}</pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ORDER TRACKING (B2B Buyer / Dealer) ─────────────────────
+function OrderTracking({customerId}){
+  const [orderId,setOrderId]=useState("");
+  const [result,setResult]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const sampleOrders=[
+    {id:"ORD-8821",status:"Shipped",oms:"SAP ERP",updated:"2h ago",items:"50× Heating Element",eta:"Mar 28"},
+    {id:"ORD-8819",status:"Processing",oms:"MS Dynamics",updated:"4h ago",items:"30× Drain Pump",eta:"Mar 29"},
+    {id:"ORD-8817",status:"Confirmed",oms:"WMS",updated:"1d ago",items:"200× Temperature Sensor",eta:"Mar 27"},
+  ];
+  async function track(){
+    if(!orderId.trim())return;
+    setLoading(true);
+    await new Promise(r=>setTimeout(r,1200));
+    const found=sampleOrders.find(o=>o.id===orderId.toUpperCase())||{
+      id:orderId.toUpperCase(),status:"In Transit",oms:"SAP ERP",updated:"1h ago",items:"Various parts",eta:"Mar 30"};
+    setResult(found);setLoading(false);
+  }
+  const stColor={"Shipped":C.success,"Processing":C.accent,"Confirmed":C.blue,"In Transit":C.warn};
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>Order Tracking</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>Real-time status from OMS systems · GET /api/track/{"{id}"}</p>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px",marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:700,color:C.navy,marginBottom:12}}>Track an order</div>
+        <div style={{display:"flex",gap:10}}>
+          <input value={orderId} onChange={e=>setOrderId(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&track()}
+            placeholder="Enter Order ID (e.g. ORD-8821)"
+            style={{flex:1,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 14px",fontSize:13,fontFamily:"IBM Plex Mono",outline:"none"}}/>
+          <button onClick={track} disabled={loading||!orderId.trim()}
+            style={{padding:"10px 22px",borderRadius:9,border:"none",background:loading?C.muted:C.primary,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            {loading?"Tracking...":"Track →"}
+          </button>
+        </div>
+        {result&&(
+          <div className="fadeUp" style={{marginTop:16,padding:"16px 18px",background:C.bg,borderRadius:10,border:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:800,color:C.navy,marginBottom:2}}>{result.id}</div>
+                <div style={{fontSize:12,color:C.muted}}>{result.items}</div>
+              </div>
+              <span style={{padding:"4px 12px",borderRadius:12,background:`${stColor[result.status]||C.muted}18`,
+                color:stColor[result.status]||C.muted,fontSize:12.5,fontWeight:700}}>{result.status}</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+              {[["OMS System",result.oms],["Last Updated",result.updated],["Estimated Arrival",result.eta]].map(([k,v])=>(
+                <div key={k} style={{padding:"9px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:10.5,color:C.muted,marginBottom:3}}>{k}</div>
+                  <div style={{fontSize:12.5,fontWeight:600,color:C.navy}}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+        <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.navy}}>Recent Orders</div>
+        {sampleOrders.map((o,i)=>(
+          <div key={i} onClick={()=>{setOrderId(o.id);setResult(o);}}
+            style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"13px 18px",borderBottom:i<2?`1px solid ${C.bg}`:"none",cursor:"pointer"}}
+            onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+            onMouseLeave={e=>e.currentTarget.style.background=""}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:C.primary,fontFamily:"IBM Plex Mono",marginBottom:2}}>{o.id}</div>
+              <div style={{fontSize:11.5,color:C.muted}}>{o.items} · {o.oms}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <span style={{padding:"3px 10px",borderRadius:10,background:`${stColor[o.status]||C.muted}18`,
+                color:stColor[o.status]||C.muted,fontSize:11.5,fontWeight:600}}>{o.status}</span>
+              <div style={{fontSize:11,color:C.muted,marginTop:3}}>ETA: {o.eta}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+// ── BUYER INTENT MONITOR ───────────────────────────────────
+function IntentMonitor(){
+  const signals=[
+    {id:"CID-MRR-001",name:"Marriott Hotels & Resorts",type:"B2B Buyer",
+     browseCount:47,orderCount:12,browseToOrder:25,lastOrder:"3d ago",
+     topViewed:["APM-HTR-001","APM-BRD-004","APM-SEN-007"],
+     risk:"medium",trend:"declining",note:"Browse frequency up 34% but orders down — possible competitor evaluation"},
+    {id:"CID-MCD-042",name:"McDonald's Corp",type:"B2B Buyer",
+     browseCount:18,orderCount:9,browseToOrder:50,lastOrder:"1d ago",
+     topViewed:["APM-MTR-002","APM-VLV-006","APM-SPR-012"],
+     risk:"low",trend:"stable",note:"Healthy browse-to-order ratio, consistent ordering pattern"},
+    {id:"CID-WIN-009",name:"Wyndham Hotels",type:"B2B Buyer",
+     browseCount:83,orderCount:4,browseToOrder:5,lastOrder:"12d ago",
+     topViewed:["APM-HTR-001","APM-IGN-011","APM-BRD-004"],
+     risk:"high",trend:"declining",note:"High browsing, very low conversion — last order 12 days ago, account at risk"},
+    {id:"CID-HDT-007",name:"Home Depot",type:"Dealer",
+     browseCount:112,orderCount:38,browseToOrder:34,lastOrder:"6h ago",
+     topViewed:["APM-CMP-003","APM-ICE-009","APM-BRD-004"],
+     risk:"low",trend:"growing",note:"Strong ordering cadence, replenishment orders increasing MoM"},
+    {id:"CID-LWS-003",name:"Lowe's Companies",type:"Dealer",
+     browseCount:34,orderCount:6,browseToOrder:18,lastOrder:"8d ago",
+     topViewed:["APM-HTR-001","APM-SEN-007","APM-SPR-012"],
+     risk:"medium",trend:"declining",note:"Order frequency dropped — browsing Heating group heavily, possible seasonal demand"},
+    {id:"CID-BBY-011",name:"Best Buy Co.",type:"Dealer",
+     browseCount:21,orderCount:2,browseToOrder:10,lastOrder:"18d ago",
+     topViewed:["APM-BRD-004","APM-ICE-009","APM-CMP-003"],
+     risk:"high",trend:"declining",note:"Last order 18 days ago, significantly below baseline — urgent outreach recommended"},
+  ];
+
+  const riskColor={low:C.success,medium:C.warn,high:C.danger};
+  const trendIcon={growing:"↑",stable:"→",declining:"↓"};
+  const trendColor={growing:C.success,stable:C.muted,declining:C.danger};
+  const [sel,setSel]=useState(null);
+  const [filter,setFilter]=useState("All");
+
+  const filtered=filter==="All"?signals:signals.filter(s=>s.risk===filter.toLowerCase());
+  const highRisk=signals.filter(s=>s.risk==="high").length;
+  const medRisk=signals.filter(s=>s.risk==="medium").length;
+  const avgConv=Math.round(signals.reduce((a,s)=>a+s.browseToOrder,0)/signals.length);
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1,background:C.bg}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>🎯 Buyer Intent Monitor</h2>
+          <p style={{fontSize:12.5,color:C.muted}}>Browse vs order signals · Early churn detection · Catalog engagement by customer</p>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          {["All","High","Medium","Low"].map(f=>(
+            <button key={f} onClick={()=>setFilter(f)}
+              style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${filter===f?C.primary:C.border}`,
+                background:filter===f?C.primary:C.surface,color:filter===f?"#fff":C.muted,
+                fontSize:11.5,fontWeight:600,cursor:"pointer"}}>
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Summary KPIs */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+        {[
+          {l:"High Risk Accounts",v:highRisk,c:C.danger,icon:"🔴",sub:"Urgent outreach needed"},
+          {l:"Medium Risk",v:medRisk,c:C.warn,icon:"🟡",sub:"Monitor closely"},
+          {l:"Avg Browse→Order",v:avgConv+"%",c:C.primary,icon:"📊",sub:"Conversion rate"},
+          {l:"Active Browsers",v:signals.length,c:C.success,icon:"👁️",sub:"Customers viewing catalog"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,
+            padding:"14px 16px",borderTop:`3px solid ${s.c}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <div style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase"}}>{s.l}</div>
+              <span style={{fontSize:14}}>{s.icon}</span>
+            </div>
+            <div style={{fontSize:22,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono",marginBottom:2}}>{s.v}</div>
+            <div style={{fontSize:11,color:C.muted}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:14}}>
+        {/* Customer intent table */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.navy}}>Customer Intent Signals</span>
+            <span style={{fontSize:11,color:C.muted}}>{filtered.length} customers</span>
+          </div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {["Customer","Type","Browse","Orders","Conversion","Trend","Risk","Last Order"].map(h=>(
+                  <th key={h} style={{padding:"8px 12px",textAlign:"left",fontSize:10.5,color:C.muted,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((s,i)=>(
+                <tr key={i} onClick={()=>setSel(s)}
+                  style={{borderTop:`1px solid ${C.border}`,cursor:"pointer",
+                    background:sel?.id===s.id?C.primaryDim:"transparent",transition:"background .1s"}}
+                  onMouseEnter={e=>!sel&&(e.currentTarget.style.background=C.bg)}
+                  onMouseLeave={e=>!sel&&(e.currentTarget.style.background="")}>
+                  <td style={{padding:"10px 12px"}}>
+                    <div style={{fontSize:12.5,fontWeight:600,color:C.navy}}>{s.name}</div>
+                    <div style={{fontSize:10.5,fontFamily:"IBM Plex Mono",color:C.muted}}>{s.id}</div>
+                  </td>
+                  <td style={{padding:"10px 12px"}}>
+                    <span style={{padding:"2px 7px",borderRadius:8,
+                      background:s.type==="B2B Buyer"?`${C.accent}18`:`${C.success}18`,
+                      color:s.type==="B2B Buyer"?C.accent:C.success,fontSize:10.5,fontWeight:600}}>{s.type}</span>
+                  </td>
+                  <td style={{padding:"10px 12px",fontFamily:"IBM Plex Mono",fontWeight:700,color:C.navy}}>{s.browseCount}</td>
+                  <td style={{padding:"10px 12px",fontFamily:"IBM Plex Mono",color:C.primary,fontWeight:700}}>{s.orderCount}</td>
+                  <td style={{padding:"10px 12px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <div style={{width:44,height:5,background:C.bg,borderRadius:3,overflow:"hidden"}}>
+                        <div style={{height:"100%",borderRadius:3,
+                          background:s.browseToOrder>=40?C.success:s.browseToOrder>=20?C.warn:C.danger,
+                          width:s.browseToOrder+"%"}}/>
+                      </div>
+                      <span style={{fontSize:11.5,fontWeight:700,
+                        color:s.browseToOrder>=40?C.success:s.browseToOrder>=20?C.warn:C.danger}}>
+                        {s.browseToOrder}%
+                      </span>
+                    </div>
+                  </td>
+                  <td style={{padding:"10px 12px"}}>
+                    <span style={{fontSize:14,color:trendColor[s.trend],fontWeight:700}}>{trendIcon[s.trend]}</span>
+                  </td>
+                  <td style={{padding:"10px 12px"}}>
+                    <span style={{padding:"3px 9px",borderRadius:10,
+                      background:`${riskColor[s.risk]}18`,color:riskColor[s.risk],
+                      fontSize:10.5,fontWeight:700,textTransform:"capitalize"}}>{s.risk}</span>
+                  </td>
+                  <td style={{padding:"10px 12px",fontSize:11.5,color:C.muted}}>{s.lastOrder}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Detail panel */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px"}}>
+          {sel?(
+            <div className="fadeUp">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                <div>
+                  <div style={{fontSize:13.5,fontWeight:700,color:C.navy,marginBottom:3}}>{sel.name}</div>
+                  <div style={{fontSize:11,fontFamily:"IBM Plex Mono",color:C.muted}}>{sel.id}</div>
+                </div>
+                <span style={{padding:"3px 10px",borderRadius:10,
+                  background:`${riskColor[sel.risk]}18`,color:riskColor[sel.risk],
+                  fontSize:11,fontWeight:700,textTransform:"capitalize"}}>{sel.risk} risk</span>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                {[
+                  {l:"Browse sessions",v:sel.browseCount},
+                  {l:"Orders placed",v:sel.orderCount},
+                  {l:"Conversion",v:sel.browseToOrder+"%"},
+                  {l:"Last order",v:sel.lastOrder},
+                ].map((f,i)=>(
+                  <div key={i} style={{padding:"8px 10px",background:C.bg,borderRadius:8}}>
+                    <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{f.l}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:C.navy,fontFamily:"IBM Plex Mono"}}>{f.v}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{fontSize:12,fontWeight:600,color:C.navy,marginBottom:6}}>Top viewed SKUs</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:14}}>
+                {sel.topViewed.map(sku=>(
+                  <span key={sku} style={{padding:"3px 9px",borderRadius:8,background:C.primaryDim,
+                    color:C.primary,fontSize:10.5,fontWeight:600,fontFamily:"IBM Plex Mono"}}>{sku}</span>
+                ))}
+              </div>
+
+              <div style={{fontSize:12,fontWeight:600,color:C.navy,marginBottom:6}}>AI Signal Analysis</div>
+              <div style={{padding:"10px 12px",background:
+                sel.risk==="high"?`${C.danger}08`:sel.risk==="medium"?`${C.warn}08`:`${C.success}08`,
+                borderRadius:9,border:`1px solid ${riskColor[sel.risk]}25`,
+                fontSize:11.5,lineHeight:1.6,color:C.text}}>
+                {sel.note}
+              </div>
+
+              {sel.risk!=="low"&&(
+                <button style={{marginTop:12,width:"100%",padding:"9px",borderRadius:9,border:"none",
+                  background:sel.risk==="high"?C.danger:C.warn,color:"#fff",
+                  fontSize:12.5,fontWeight:700,cursor:"pointer"}}>
+                  {sel.risk==="high"?"🚨 Flag for Urgent Outreach":"⚠️ Schedule Follow-up"}
+                </button>
+              )}
+            </div>
+          ):(
+            <div style={{textAlign:"center",padding:"40px 20px",color:C.muted}}>
+              <div style={{fontSize:32,marginBottom:10}}>🎯</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.navy,marginBottom:6}}>Buyer Intent Monitor</div>
+              <div style={{fontSize:12,lineHeight:1.6}}>
+                Click a customer row to see their browsing patterns, top-viewed SKUs, and AI signal analysis
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CHURN AGENT ────────────────────────────────────────────
+function ChurnAgent(){
+  const [customers]=useState([
+    {id:"D001",name:"Marriott Hotels & Resorts",type:"B2B Buyer",returns:2.1,delay:0.8,tier:"Gold",rev:284000,trend:"up",risk:"low"},
+    {id:"D002",name:"McDonald's Corp",type:"B2B Buyer",returns:8.7,delay:3.2,tier:"Silver",rev:156000,trend:"down",risk:"high"},
+    {id:"D003",name:"Pacific Rim Parts LLC",type:"Dealer",returns:4.3,delay:1.1,tier:"Gold",rev:412000,trend:"up",risk:"low"},
+    {id:"D004",name:"Sunbelt Appliance Supply",region:"South",returns:6.2,delay:2.8,tier:"Standard",rev:98000,trend:"down",risk:"medium"},
+    {id:"D005",name:"Great Lakes OEM Partners",type:"Dealer",returns:1.9,delay:0.5,tier:"Platinum",rev:623000,trend:"up",risk:"low"},
+  ]);
+  const [recs,setRecs]=useState({});
+  const [loading,setLoading]=useState({});
+  async function getRec(d){
+    setLoading(l=>({...l,[d.id]:true}));
+    const sys="You are a B2B distributor retention specialist. Respond with professionally formatted markdown. Use **bold** for key metrics and action items. If recommending actions, use a numbered list. Keep it concise — 3-5 sentences or bullet points max.";
+    const prompt=`Distributor: ${d.name} | Region: ${d.region} | Tier: ${d.tier} | Rev: $${d.rev.toLocaleString()} | Returns: ${d.returns}% | Avg Delay: ${d.delay} days | Trend: ${d.trend} | Risk: ${d.risk}. Give a concise retention recommendation.`;
+    try{
+      const rec=await callClaude([{role:"user",content:prompt}],sys,300);
+      setRecs(r=>({...r,[d.id]:rec}));
+    }finally{setLoading(l=>({...l,[d.id]:false}));}
+  }
+  const riskColor={low:C.success,medium:C.warn,high:C.danger};
+  return(
+    <div style={{padding:28,flex:1,overflowY:"auto"}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{fontSize:19,fontWeight:800,color:C.navy,marginBottom:2}}>📉 Customer Churn Signals</h2>
+        <p style={{fontSize:12.5,color:C.muted}}>B2B Buyer and Dealer retention analysis · AI-powered risk scoring</p>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {customers.map(d=>(
+          <Card key={d.id}>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 140px",gap:14,alignItems:"center",marginBottom:recs[d.id]?14:0}}>
+              <div>
+                <div style={{fontWeight:700,color:C.navy,fontSize:14}}>{d.name}</div>
+                <div style={{fontSize:12,color:C.muted}}>{d.region} · {d.tier} Tier</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:17,fontWeight:700,color:C.primary,fontFamily:"IBM Plex Mono"}}>${(d.rev/1000).toFixed(0)}K</div>
+                <div style={{fontSize:11,color:C.muted}}>Revenue {d.trend==="up"?"↑":"↓"}</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:17,fontWeight:700,color:d.returns>6?C.danger:C.text,fontFamily:"IBM Plex Mono"}}>{d.returns}%</div>
+                <div style={{fontSize:11,color:C.muted}}>Returns</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:17,fontWeight:700,fontFamily:"IBM Plex Mono"}}>{d.delay}d</div>
+                <div style={{fontSize:11,color:C.muted}}>Avg Delay</div>
+              </div>
+              <div style={{textAlign:"center"}}>
+                <Badge color={riskColor[d.risk]}>{d.risk.toUpperCase()} RISK</Badge>
+              </div>
+              <Btn variant={recs[d.id]?"ghost":"primary"} small onClick={()=>getRec(d)} disabled={loading[d.id]}>
+                {loading[d.id]?<><Spinner/> Analyzing...</>:recs[d.id]?"🔄 Refresh":"Get AI Rec"}
+              </Btn>
+            </div>
+            {recs[d.id]&&(
+              <div className="fadeUp" style={{padding:"14px 18px",background:C.primaryDim,borderRadius:12,border:`1px solid ${C.primary}20`}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+                  <span style={{background:C.primary,color:"#fff",borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:700}}>AI RECOMMENDATION</span>
+                </div>
+                <RichMessage text={recs[d.id]} isUser={false}/>
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+
+// ── AI SUPPORT AGENT ───────────────────────────────────────
+function SupportAgent(){
+  const [issues,setIssues]=useState([
+    {id:"ISS-001",portal:"Eastern Tech Distributor",type:"High Error Rate",severity:"high",desc:"HTTP 422 errors spiking — 312 errors in last 24h, 5.5% error rate",status:"open",resolution:null},
+    {id:"ISS-002",portal:"SAP Ariba Integration",type:"Latency Spike",severity:"medium",desc:"Avg latency jumped from 210ms to 890ms — possible payload size issue",status:"open",resolution:null},
+    {id:"ISS-003",portal:"Meridian Foods Corp",type:"Auth Token Expiry",severity:"low",desc:"API key rotation due in 3 days — automated renewal not configured",status:"open",resolution:null},
+  ]);
+  const [loading,setLoading]=useState({});
+  const [chatMsgs,setChatMsgs]=useState([
+    {role:"assistant",content:"Hi! I'm the BridgeTech Support Agent. I can help diagnose portal issues, suggest fixes, and guide resolutions. What can I help you with?"}
+  ]);
+  const [chatInput,setChatInput]=useState("");
+  const [chatLoading,setChatLoading]=useState(false);
+  const chatRef=useRef();
+  const sys=`You are an expert API orchestration support agent for BridgeTech's Universal API Orchestrator Platform. 
+You help diagnose and resolve issues with portal integrations, API errors, latency spikes, authentication failures, and more.
+Known portals: SAP Ariba (Vendor), Amazon B2B (Dealer), Meridian Foods Corp (B2B Buyer, at BridgeTech Orchestration Hub), Eastern Tech Distributor (warning status), Sunbelt Supply (inactive).
+
+FORMATTING RULES (always follow):
+- Structure resolution plans as: ## Root Cause, ## Immediate Fix, ## Prevention
+- Use numbered lists for sequential steps
+- Use **bold** for commands, config keys, and critical values
+- Use \`code\` formatting for API paths, config values, and commands
+- Use markdown tables when comparing portal stats, error rates, or metrics
+- Keep responses clear and professional`;
+
+  async function resolve(issue){
+    setLoading(l=>({...l,[issue.id]:true}));
+    const prompt=`Issue: ${issue.type} on ${issue.portal}. Severity: ${issue.severity}. Details: ${issue.desc}. Provide a 3-step resolution plan with: 1) Root cause analysis, 2) Immediate fix, 3) Prevention measures. Be concise.`;
+    try{
+      const res=await callClaude([{role:"user",content:prompt}],sys,500);
+      setIssues(is=>is.map(i=>i.id===issue.id?{...i,resolution:res,status:"resolved"}:i));
+    }finally{setLoading(l=>({...l,[issue.id]:false}));}
+  }
+  async function sendChat(){
+    if(!chatInput.trim()||chatLoading)return;
+    const um={role:"user",content:chatInput};
+    const newMsgs=[...chatMsgs,um];
+    setChatMsgs(newMsgs);setChatInput("");setChatLoading(true);
+    try{
+      const res=await callClaude(newMsgs.map(m=>({role:m.role,content:m.content})),sys,600);
+      setChatMsgs([...newMsgs,{role:"assistant",content:res}]);
+    }finally{setChatLoading(false);}
+  }
+  useEffect(()=>{if(chatRef.current)chatRef.current.scrollTop=chatRef.current.scrollHeight;},[chatMsgs]);
+  const sevColor={high:C.danger,medium:C.warn,low:C.success};
+  return(
+    <div style={{padding:28,flex:1,overflowY:"auto",display:"flex",gap:20}}>
+      <div style={{flex:1,minWidth:0}}>
+        <SectionTitle icon="🛡️" title="AI Support Agent" sub="Automated issue detection and AI-powered resolution"/>
+        {issues.map(issue=>(
+          <Card key={issue.id} style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
+                  <Badge color={sevColor[issue.severity]}>{issue.severity.toUpperCase()}</Badge>
+                  <span style={{fontWeight:700,color:C.navy,fontSize:14}}>{issue.type}</span>
+                  {issue.status==="resolved"&&<Badge color={C.success}>✓ Resolved</Badge>}
+                </div>
+                <div style={{fontSize:13,color:C.primary,fontWeight:500}}>{issue.portal}</div>
+                <div style={{fontSize:12,color:C.muted,marginTop:3}}>{issue.desc}</div>
+              </div>
+              <Btn variant={issue.status==="resolved"?"ghost":"primary"} small onClick={()=>resolve(issue)} disabled={loading[issue.id]||issue.status==="resolved"}>
+                {loading[issue.id]?<><Spinner/> Resolving...</>:issue.status==="resolved"?"✓ Done":"Get AI Resolution"}
+              </Btn>
+            </div>
+            {issue.resolution&&(
+              <div className="fadeUp" style={{padding:"16px 18px",background:C.success+"0A",borderRadius:12,border:`1px solid ${C.success}30`,marginTop:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+                  <span style={{background:C.success,color:"#fff",borderRadius:20,padding:"2px 10px",fontSize:11,fontWeight:700}}>✓ AI RESOLUTION PLAN</span>
+                </div>
+                <RichMessage text={issue.resolution} isUser={false}/>
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+      <div style={{width:320,display:"flex",flexDirection:"column"}}>
+        <Card style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",padding:0}}>
+          <div style={{padding:"16px 18px",borderBottom:`1px solid ${C.border}`,background:C.primaryDim}}>
+            <div style={{fontWeight:700,color:C.navy,fontSize:14}}>🛡️ AI Support Chat</div>
+            <div style={{fontSize:11,color:C.muted}}>Ask anything about your integration</div>
+          </div>
+          <div ref={chatRef} style={{flex:1,overflowY:"auto",padding:"16px",display:"flex",flexDirection:"column",gap:12,minHeight:0}}>
+            {chatMsgs.map((m,i)=>(
+              <div key={i} style={{display:"flex",gap:8,justifyContent:m.role==="user"?"flex-end":"flex-start"}}>
+                {m.role==="assistant"&&<div style={{width:28,height:28,background:C.primaryDim,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>🛡️</div>}
+                <div style={{maxWidth:"86%",background:m.role==="user"?C.primary:C.surface,
+                  border:m.role==="assistant"?`1px solid ${C.border}`:"none",
+                  borderRadius:m.role==="user"?"12px 12px 4px 12px":"12px 12px 12px 4px",
+                  padding:"10px 13px",color:m.role==="user"?"#fff":C.text,
+                  boxShadow:m.role==="assistant"?"0 1px 4px rgba(0,0,0,0.05)":"none"}}>
+                  <RichMessage text={m.content} isUser={m.role==="user"}/>
+                </div>
+              </div>
+            ))}
+            {chatLoading&&<div style={{display:"flex",gap:8}}>
+              <div style={{width:28,height:28,background:C.primaryDim,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>🛡️</div>
+              <div style={{background:C.bg,borderRadius:"12px 12px 12px 4px",padding:"12px 16px",display:"flex",gap:4}}>
+                {[0,1,2].map(j=><div key={j} style={{width:6,height:6,borderRadius:"50%",background:C.muted,animation:`pulse 1.2s ease-in-out ${j*.2}s infinite`}}/>)}
+              </div>
+            </div>}
+          </div>
+          <div style={{padding:"10px 14px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8}}>
+            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendChat()}
+              placeholder="Ask about portal issues..." style={{flex:1,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,outline:"none"}}/>
+            <Btn small onClick={sendChat} disabled={chatLoading}>↑</Btn>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+
+// ── AI SCHEMA BRIDGE AGENT ─────────────────────────────────
+const VENDOR_SCHEMAS = {
+  "SAP Ariba": {
+    color: "#0070A0",
+    endpoint: "POST /api/ariba/v2/purchase-orders",
+    structure: {
+      "PurchaseOrder": {
+        "POHeader": {
+          "PONumber": "string",
+          "VendorID": "string",
+          "OrderDate": "YYYY-MM-DD",
+          "Currency": "string",
+          "TotalAmount": "decimal",
+          "Status": "OPEN|CLOSED|PENDING"
+        },
+        "LineItems": [{
+          "LineNum": "integer",
+          "PartNumber": "string",
+          "Qty": "integer",
+          "UnitCost": "decimal",
+          "Description": "string"
+        }],
+        "ShipTo": {
+          "AddressLine1": "string",
+          "City": "string",
+          "PostCode": "string",
+          "CountryCode": "ISO2"
+        }
+      }
+    }
+  },
+  "Eastern Tech": {
+    color: "#E84040",
+    endpoint: "POST /orders/submit",
+    structure: {
+      "order_data": {
+        "ref_id": "string",
+        "supplier": "string",
+        "date_placed": "MM/DD/YYYY",
+        "curr": "string",
+        "total": "float",
+        "order_status": "new|complete|hold",
+        "items": [{
+          "seq": "int",
+          "part_no": "string",
+          "quantity": "int",
+          "cost_each": "float",
+          "item_desc": "string"
+        }],
+        "delivery": {
+          "street": "string",
+          "city_name": "string",
+          "zip": "string",
+          "country": "string"
+        }
+      }
+    }
+  },
+  "Custom Vendor": {
+    color: "#7C3AED",
+    endpoint: "POST /v1/create-order",
+    structure: {
+      "createOrderRequest": {
+        "orderId": "UUID",
+        "vendorCode": "string",
+        "transactionDate": "ISO8601",
+        "currencyCode": "string",
+        "grandTotal": "number",
+        "fulfillmentStatus": "pending|fulfilled|cancelled",
+        "orderLines": [{
+          "lineId": "number",
+          "skuCode": "string",
+          "requestedQty": "number",
+          "pricePerUnit": "number",
+          "productName": "string"
+        }],
+        "shippingAddress": {
+          "addressLine": "string",
+          "cityName": "string",
+          "postalCode": "string",
+          "countryName": "string"
+        }
+      }
+    }
+  }
+};
+
+const BT_SCHEMA = {
+  endpoint: "POST /api/incoming",
+  structure: {
+    "order": {
+      "id": "string (UUID)",
+      "portal_id": "string",
+      "created_at": "ISO8601",
+      "currency": "string (ISO4217)",
+      "total_amount": "number",
+      "status": "pending|approved|rejected",
+      "line_items": [{
+        "line_number": "integer",
+        "sku": "string",
+        "quantity": "integer",
+        "unit_price": "number",
+        "description": "string"
+      }],
+      "shipping": {
+        "address": "string",
+        "city": "string",
+        "postal_code": "string",
+        "country_code": "string (ISO2)"
+      }
+    }
+  }
+};
+
+function JsonTree({data, depth=0, highlight=null}){
+  if(typeof data !== "object" || data === null){
+    const isStr = typeof data === "string";
+    return <span style={{color: isStr ? "#22C55E" : "#F59E0B", fontFamily:"IBM Plex Mono", fontSize:11}}>{isStr ? `"${data}"` : String(data)}</span>;
+  }
+  const isArr = Array.isArray(data);
+  const keys = Object.keys(data);
+  return(
+    <span>
+      <span style={{color:"#94A3B8"}}>{isArr?"[":"{"}</span>
+      <div style={{paddingLeft:14}}>
+        {keys.map((k,i)=>{
+          const isHL = highlight && highlight.includes(k);
+          return(
+            <div key={k} style={{
+              display:"flex", gap:4, alignItems:"flex-start",
+              background: isHL ? "rgba(245,158,11,0.15)" : "transparent",
+              borderLeft: isHL ? "2px solid #F59E0B" : "2px solid transparent",
+              paddingLeft: isHL ? 4 : 4,
+              borderRadius: 3, marginBottom:1
+            }}>
+              <span style={{color: isHL ? "#F59E0B" : "#7DD3FC", fontFamily:"IBM Plex Mono", fontSize:11, flexShrink:0}}>
+                {isArr ? "" : `"${k}": `}
+              </span>
+              <JsonTree data={data[k]} depth={depth+1} highlight={highlight}/>
+              {i < keys.length-1 && <span style={{color:"#94A3B8"}}>,</span>}
+            </div>
+          );
+        })}
+      </div>
+      <span style={{color:"#94A3B8"}}>{isArr?"]":"}"}</span>
+    </span>
+  );
+}
+
+function AnimatedArrow({from, to, color, label, active}){
+  return(
+    <div style={{display:"flex", alignItems:"center", gap:6, padding:"5px 0",
+      opacity: active ? 1 : 0.35, transition:"opacity .4s"}}>
+      <div style={{fontSize:11, fontFamily:"IBM Plex Mono", color: active ? color : C.muted,
+        background: active ? color+"15" : C.bg, padding:"3px 8px", borderRadius:4,
+        border:`1px solid ${active ? color+"40" : C.border}`, whiteSpace:"nowrap",
+        fontWeight: active ? 600 : 400, minWidth:100, textAlign:"right"}}>{from}</div>
+      <div style={{flex:1, position:"relative", height:20, minWidth:60}}>
+        <div style={{position:"absolute", top:"50%", left:0, right:0,
+          height: active ? 2 : 1, background: active ? color : C.border,
+          transform:"translateY(-50%)", transition:"all .4s"}}/>
+        <div style={{position:"absolute", top:"50%", left:"50%",
+          transform:"translate(-50%,-50%)",
+          background: active ? color : C.border,
+          color:"#fff", fontSize:9, padding:"2px 6px", borderRadius:10,
+          whiteSpace:"nowrap", fontWeight:600, transition:"all .4s",
+          opacity: active ? 1 : 0.4}}>{label}</div>
+        <div style={{position:"absolute", right:-1, top:"50%", transform:"translateY(-50%)",
+          width:0, height:0, borderTop:"5px solid transparent",
+          borderBottom:"5px solid transparent",
+          borderLeft:`6px solid ${active ? color : C.border}`, transition:"all .4s"}}/>
+      </div>
+      <div style={{fontSize:11, fontFamily:"IBM Plex Mono", color: active ? C.success : C.muted,
+        background: active ? C.success+"12" : C.bg, padding:"3px 8px", borderRadius:4,
+        border:`1px solid ${active ? C.success+"40" : C.border}`, whiteSpace:"nowrap",
+        fontWeight: active ? 600 : 400, minWidth:100}}>{to}</div>
+    </div>
+  );
+}
+
+function SchemaBridge(){
+  const [requests, setRequests]   = useState(()=>window.__PORTAL_REQUESTS||[]);
+  const [selected, setSelected]   = useState(null);
+  const [phase, setPhase]         = useState("idle");
+  const [liveLog, setLiveLog]     = useState([]);
+  const [mappings, setMappings]   = useState([]);
+  const [aiRec, setAiRec]         = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [applyStep, setApplyStep] = useState(-1);
+  const [appliedMap, setAppliedMap] = useState([]);
+  const [verifyResult, setVerifyResult] = useState(null);
+  const logRef = useRef();
+
+  // Refresh from global store every time we select
+  function refreshRequests(){ setRequests([...(window.__PORTAL_REQUESTS||[])]); }
+
+  // ── Derive field mappings from submitted schema ─────────────
+  function deriveMappings(schema){
+    let parsed = {};
+    try{ parsed = JSON.parse(schema); }catch{ return []; }
+    const flat = flattenKeys(parsed,"");
+    const BT_FIELDS = {
+      "id":"id",          "order_id":"id",        "po_id":"id",        "order_ref":"id",     "OrderID":"id","purchase_order.po_id":"id",
+      "portal_id":"portal_id","vendor_id":"portal_id","dealer_code":"portal_id","customerCode":"portal_id","vendor_order.vendor_id":"portal_id",
+      "created_at":"created_at","placed_on":"created_at","order_date":"created_at","Timestamp":"created_at","date_placed":"created_at",
+      "currency":"currency","currency_code":"currency","CurrencyISO":"currency","curr":"currency",
+      "total_amount":"total_amount","order_total":"total_amount","TotalValue":"total_amount","amount_total":"total_amount","total":"total_amount",
+      "status":"status","state":"status","OrderState":"status","po_status":"status","order_status":"status","fulfillmentStatus":"status",
+      "line_items[].sku":"line_items[].sku","products[].prod_id":"line_items[].sku","Items[].SKUCode":"line_items[].sku","line_items[].part_number":"line_items[].sku","line_num[].part_number":"line_items[].sku",
+      "line_items[].quantity":"line_items[].quantity","products[].qty":"line_items[].quantity","Items[].Units":"line_items[].quantity","line_items[].ordered_qty":"line_items[].quantity",
+      "line_items[].unit_price":"line_items[].unit_price","products[].unit_price":"line_items[].unit_price","Items[].PriceEach":"line_items[].unit_price","line_items[].line_price":"line_items[].unit_price",
+      "shipping.city":"shipping.city","ship_to.city":"shipping.city","DeliveryAddress.City":"shipping.city","delivery.city_name":"shipping.city",
+      "shipping.postal_code":"shipping.postal_code","ship_to.postal":"shipping.postal_code","DeliveryAddress.ZipCode":"shipping.postal_code","delivery.post_code":"shipping.postal_code",
+      "shipping.country_code":"shipping.country_code","ship_to.nation":"shipping.country_code","DeliveryAddress.CountryCode":"shipping.country_code","delivery.country_iso":"shipping.country_code",
+    };
+    const maps=[];
+    flat.forEach(key=>{
+      const btField = BT_FIELDS[key];
+      if(btField){
+        const vKey=key.split(".").pop()||key;
+        const btKey=btField.split(".").pop()||btField;
+        const sameKey=vKey===btKey||vKey.toLowerCase()===btKey.toLowerCase();
+        const isDate=btField==="created_at";
+        const isCountry=btField==="shipping.country_code"&&!key.includes("ISO");
+        const isEnum=btField==="status";
+        let type="rename", color=C.blue, label="rename";
+        if(sameKey){type="passthrough";color=C.success;label="✓ match";}
+        else if(isDate){type="transform";color=C.warn;label="date format";}
+        else if(isCountry){type="transform";color=C.danger;label="ISO convert";}
+        else if(isEnum){type="transform";color=C.accent;label="enum map";}
+        maps.push({from:key, to:btField, type, color, label,
+          issue:type==="passthrough"?null:`${type==="rename"?"Field rename":"Transform"}: ${key} → ${btField}`});
+      }
+    });
+    return maps.length?maps:[
+      {from:"order_id",to:"id",type:"rename",color:C.blue,label:"rename",issue:"Field rename required"},
+      {from:"vendor_code",to:"portal_id",type:"rename",color:C.blue,label:"rename",issue:"Field rename required"},
+      {from:"order_date",to:"created_at",type:"transform",color:C.warn,label:"date format",issue:"Date format conversion required"},
+      {from:"amount",to:"total_amount",type:"rename",color:C.blue,label:"rename",issue:"Field rename required"},
+      {from:"state",to:"status",type:"transform",color:C.accent,label:"enum map",issue:"Enum mapping required"},
+    ];
+  }
+
+  function flattenKeys(obj, prefix){
+    const keys=[];
+    if(typeof obj!=="object"||!obj) return keys;
+    Object.entries(obj).forEach(([k,v])=>{
+      const full=prefix?`${prefix}.${k}`:k;
+      if(Array.isArray(v)&&v.length&&typeof v[0]==="object"){
+        Object.keys(v[0]).forEach(ak=>keys.push(`${full}[].${ak}`));
+      } else if(typeof v==="object"&&!Array.isArray(v)){
+        keys.push(...flattenKeys(v,full));
+      } else { keys.push(full); }
+    });
+    return keys;
+  }
+
+  // ── PHASE 1: Scan & Analyze ─────────────────────────────────
+  async function runAnalysis(){
+    if(!selected){alert("Please select a portal request first");return;}
+    setPhase("scanning");setLiveLog([]);setMappings([]);
+    setAiRec("");setApplyStep(-1);setAppliedMap([]);setVerifyResult(null);
+
+    const maps = deriveMappings(selected.schema||"{}");
+    const issues = maps.filter(m=>m.issue);
+    const logItems=[
+      {icon:"📡",msg:`Portal request received: ${selected.name} (${selected.type})`,color:C.blue},
+      {icon:"🔍",msg:`Scanning endpoint: ${selected.baseUrl}${selected.inbound}`,color:C.primary},
+      {icon:"📋",msg:`Auth method: ${selected.auth} · Submitted: ${selected.submittedAt}`,color:C.muted},
+      {icon:"🧬",msg:`Schema loaded — ${maps.length} fields identified`,color:C.accent},
+      {icon:"⚠️",msg:`${issues.length} incompatibilities detected with BridgeTech schema`,color:C.warn},
+      {icon:"🧠",msg:"AI Agent generating bridge recommendation...",color:C.primary},
+    ];
+
+    for(let i=0;i<logItems.length;i++){
+      await new Promise(r=>setTimeout(r,500));
+      setLiveLog(l=>[...l,logItems[i]]);
+      if(i===3)setPhase("analyzing");
+      if(i===5)setPhase("recommending");
+      if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;
+    }
+
+    // Reveal mappings
+    setPhase("mapping");
+    for(let i=0;i<maps.length;i++){
+      await new Promise(r=>setTimeout(r,150));
+      setMappings(m=>[...m,maps[i]]);
+    }
+
+    // AI recommendation
+    setAiLoading(true);
+    const sys=`You are an AI API Integration Specialist for BridgeTech Orchestration Platform.
+A ${selected.type} portal has submitted a connection request. Analyze the schema and provide bridge recommendations.
+Always use markdown with: ## Issues Found, ## Bridge Strategy, ## Transformation Rules (as a numbered list), ## Risk Assessment.
+Be concise and actionable.`;
+    const prompt=`Portal: ${selected.name} (${selected.type})
+Endpoint: ${selected.baseUrl}${selected.inbound}
+Auth: ${selected.auth}
+Schema: ${selected.schema||"Not provided"}
+
+Detected issues:
+${issues.map((m,i)=>`${i+1}. ${m.issue}`).join("\n")||"None — direct mapping possible"}
+
+Field mappings required:
+${maps.map(m=>`- ${m.from} → ${m.to} (${m.label})`).join("\n")}
+
+Provide bridge recommendation. End with a clear statement on whether this portal can be bridged automatically.`;
+
+    const rec=await callClaude([{role:"user",content:prompt}],sys,900);
+    setAiRec(rec);
+    setAiLoading(false);
+    setPhase("recommended");
+    setMappings(maps);
+  }
+
+  // ── PHASE 2: Apply AI Changes ───────────────────────────────
+  async function applyChanges(){
+    setPhase("applying");
+    setApplyStep(0);
+    setAppliedMap([]);
+
+    const applyLog=[
+      {icon:"⚙️",msg:"Initialising transformation engine...",color:C.primary},
+      {icon:"🔑",msg:"Applying field rename rules...",color:C.blue},
+      {icon:"📅",msg:"Applying date format transformers...",color:C.warn},
+      {icon:"🔄",msg:"Applying enum value mappings...",color:C.accent},
+      {icon:"🌍",msg:"Applying country code converters...",color:C.danger},
+      {icon:"🔗",msg:"Compiling bridge middleware layer...",color:C.primary},
+      {icon:"✅",msg:"Transformation rules compiled successfully",color:C.success},
+    ];
+
+    for(let i=0;i<applyLog.length;i++){
+      await new Promise(r=>setTimeout(r,600));
+      setLiveLog(l=>[...l,applyLog[i]]);
+      setApplyStep(i);
+      if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;
+    }
+
+    // Mark each mapping applied
+    for(let i=0;i<mappings.length;i++){
+      await new Promise(r=>setTimeout(r,120));
+      setAppliedMap(a=>[...a,i]);
+    }
+
+    // Phase 3: Re-verify
+    setPhase("verifying");
+    const verifyLog=[
+      {icon:"🔍",msg:"Re-verifying schema against BridgeTech target...",color:C.blue},
+      {icon:"📊",msg:"Checking field completeness...",color:C.primary},
+      {icon:"🧪",msg:"Running test payload through bridge...",color:C.accent},
+      {icon:"✅",msg:"All fields mapped — verification passed!",color:C.success},
+    ];
+    for(let i=0;i<verifyLog.length;i++){
+      await new Promise(r=>setTimeout(r,550));
+      setLiveLog(l=>[...l,verifyLog[i]]);
+      if(logRef.current)logRef.current.scrollTop=logRef.current.scrollHeight;
+    }
+
+    await new Promise(r=>setTimeout(r,400));
+    const passCount=mappings.filter(m=>m.type==="passthrough").length;
+    const totalCount=mappings.length;
+    setVerifyResult({
+      pass:true,
+      matched:totalCount,
+      direct:passCount,
+      transformed:mappings.filter(m=>m.type==="transform").length,
+      renamed:mappings.filter(m=>m.type==="rename").length,
+    });
+
+    // Mark portal as bridged in global store
+    if(window.__PORTAL_REQUESTS){
+      const idx=window.__PORTAL_REQUESTS.findIndex(r=>r.id===selected.id);
+      if(idx>=0){
+        window.__PORTAL_REQUESTS[idx]={...window.__PORTAL_REQUESTS[idx],
+          status:"active",bridgeStatus:"mapped"};
+      }
+    }
+    setRequests([...(window.__PORTAL_REQUESTS||[])]);
+    setSelected(s=>({...s,status:"active",bridgeStatus:"mapped"}));
+    setPhase("complete");
+  }
+
+  const phaseColor={idle:C.muted,scanning:C.blue,analyzing:C.warn,mapping:C.accent,
+    recommending:C.primary,recommended:C.primary,applying:C.accent,verifying:C.warn,complete:C.success};
+  const phaseLabel={idle:"Select a Portal",scanning:"Scanning",analyzing:"Analyzing Schema",
+    mapping:"Mapping Fields",recommending:"AI Thinking",recommended:"Review Recommendation",
+    applying:"Applying Changes",verifying:"Re-verifying",complete:"✓ Mapping Complete"};
+
+  const pending=requests.filter(r=>r.bridgeStatus==="pending"||!r.bridgeStatus);
+  const bridged=requests.filter(r=>r.bridgeStatus==="mapped");
+  const typeColor={"B2B Buyer":C.accent,Vendor:C.blue,Dealer:C.success,Distributor:C.warn};
+
+  return(
+    <div style={{padding:"20px 24px",overflowY:"auto",flex:1,background:C.bg,display:"flex",flexDirection:"column",gap:14}}>
+
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:800,color:C.navy,marginBottom:3}}>🧠 AI Schema Bridge Agent</h2>
+          <p style={{fontSize:13,color:C.muted}}>Portal connection requests · AI schema analysis · Automated field mapping</p>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={refreshRequests} style={{padding:"6px 14px",borderRadius:8,border:`1px solid ${C.border}`,
+            background:C.surface,fontSize:12,color:C.muted,cursor:"pointer"}}>🔄 Refresh</button>
+          <div style={{padding:"6px 16px",borderRadius:20,border:`1.5px solid ${phaseColor[phase]}`,
+            background:`${phaseColor[phase]}12`,fontSize:12,fontWeight:700,color:phaseColor[phase],
+            display:"flex",alignItems:"center",gap:6}}>
+            <span style={{width:7,height:7,borderRadius:"50%",background:phaseColor[phase],
+              animation:!["idle","recommended","complete"].includes(phase)?"pulse 1s ease-in-out infinite":"none",
+              display:"inline-block"}}/>
+            {phaseLabel[phase]}
+          </div>
+        </div>
+      </div>
+
+      {/* Summary stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,flexShrink:0}}>
+        {[
+          {l:"Pending Requests",v:pending.length,c:C.warn,icon:"📬"},
+          {l:"Bridged Portals",v:bridged.length,c:C.success,icon:"✅"},
+          {l:"Total Requests",v:requests.length,c:C.primary,icon:"📡"},
+          {l:"Selected",v:selected?selected.name.split(" ")[0]+"...":"None",c:selected?typeColor[selected.type]||C.blue:C.muted,icon:"🔍"},
+        ].map((s,i)=>(
+          <Card key={i} style={{padding:"12px 16px",borderTop:`3px solid ${s.c}`,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{s.icon}</span>
+            <div>
+              <div style={{fontSize:18,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono",lineHeight:1}}>{s.v}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.l}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Main layout: Request list + Analysis */}
+      <div style={{display:"grid",gridTemplateColumns:"300px 1fr",gap:14,flex:1,minHeight:0}}>
+
+        {/* LEFT: Portal Request Inbox */}
+        <div style={{display:"flex",flexDirection:"column",gap:10,overflowY:"auto"}}>
+          <Card style={{padding:0,overflow:"hidden",flexShrink:0}}>
+            <div style={{padding:"10px 14px",background:C.warn+"12",borderBottom:`1px solid ${C.border}`,
+              display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.navy}}>⏳ Pending Requests</span>
+              <Badge color={C.warn}>{pending.length}</Badge>
+            </div>
+            {pending.length===0&&(
+              <div style={{padding:"20px",textAlign:"center",color:C.muted,fontSize:12}}>
+                No pending requests
+              </div>
+            )}
+            {pending.map((r,i)=>{
+              const isSel=selected?.id===r.id;
+              return(
+                <div key={r.id} onClick={()=>{setSelected(r);setPhase("idle");setLiveLog([]);setMappings([]);setAiRec("");setApplyStep(-1);setAppliedMap([]);setVerifyResult(null);}}
+                  style={{padding:"12px 14px",borderBottom:`1px solid ${C.bg}`,cursor:"pointer",
+                    background:isSel?C.primaryDim:C.surface,borderLeft:`3px solid ${isSel?C.primary:"transparent"}`,
+                    transition:"all .15s"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                    <span style={{fontSize:13,fontWeight:700,color:isSel?C.primary:C.navy}}>{r.name}</span>
+                    <Badge color={typeColor[r.type]||C.blue}>{r.type}</Badge>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,fontFamily:"IBM Plex Mono",marginBottom:2,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.baseUrl}</div>
+                  <div style={{fontSize:10,color:C.muted}}>{r.submittedAt}</div>
+                </div>
+              );
+            })}
+          </Card>
+
+          <Card style={{padding:0,overflow:"hidden",flexShrink:0}}>
+            <div style={{padding:"10px 14px",background:C.success+"12",borderBottom:`1px solid ${C.border}`,
+              display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.navy}}>✅ Bridged Portals</span>
+              <Badge color={C.success}>{bridged.length}</Badge>
+            </div>
+            {bridged.length===0&&(
+              <div style={{padding:"16px",textAlign:"center",color:C.muted,fontSize:12}}>No bridged portals yet</div>
+            )}
+            {bridged.map((r,i)=>{
+              const isSel=selected?.id===r.id;
+              return(
+                <div key={r.id} onClick={()=>setSelected(r)}
+                  style={{padding:"10px 14px",borderBottom:`1px solid ${C.bg}`,cursor:"pointer",
+                    background:isSel?C.success+"0F":C.surface,borderLeft:`3px solid ${isSel?C.success:"transparent"}`,
+                    transition:"all .15s"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
+                    <span style={{fontSize:12,fontWeight:600,color:C.navy}}>{r.name}</span>
+                    <Badge color={C.success}>Mapped</Badge>
+                  </div>
+                  <div style={{fontSize:10,color:C.muted}}>{r.type} · {r.auth}</div>
+                </div>
+              );
+            })}
+          </Card>
+        </div>
+
+        {/* RIGHT: Analysis workspace */}
+        <div style={{display:"flex",flexDirection:"column",gap:12,overflowY:"auto"}}>
+
+          {/* No selection state */}
+          {!selected&&(
+            <Card style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:40}}>
+              <div style={{fontSize:48,marginBottom:16}}>📬</div>
+              <div style={{fontSize:16,fontWeight:700,color:C.navy,marginBottom:8}}>Select a Portal Request</div>
+              <div style={{fontSize:13,color:C.muted,textAlign:"center",maxWidth:340}}>
+                Choose a pending request from the inbox on the left. The AI Bridge Agent will analyze the schema, detect mismatches, and guide you through bridging it to the BridgeTech Universal API.
+              </div>
+            </Card>
+          )}
+
+          {/* Selected portal info + controls */}
+          {selected&&(
+            <>
+              {/* Portal detail card */}
+              <Card style={{padding:"16px 20px",borderLeft:`4px solid ${typeColor[selected.type]||C.blue}`,flexShrink:0}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                      <span style={{fontSize:16,fontWeight:800,color:C.navy}}>{selected.name}</span>
+                      <Badge color={typeColor[selected.type]||C.blue}>{selected.type}</Badge>
+                      {selected.bridgeStatus==="mapped"
+                        ?<Badge color={C.success}>✓ Bridge Complete</Badge>
+                        :<Badge color={C.warn}>⏳ Pending Bridge</Badge>}
+                    </div>
+                    <div style={{fontSize:12,color:C.muted,fontFamily:"IBM Plex Mono"}}>{selected.baseUrl} · {selected.auth}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>Submitted: {selected.submittedAt}</div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    {phase==="idle"&&(
+                      <Btn onClick={runAnalysis}>🧠 Run AI Bridge Agent</Btn>
+                    )}
+                    {phase==="recommended"&&(
+                      <Btn variant="accent" onClick={applyChanges}>⚡ Apply AI Changes</Btn>
+                    )}
+                    {!["idle","recommended","complete"].includes(phase)&&phase!=="idle"&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8,color:phaseColor[phase],fontSize:13,fontWeight:600}}>
+                        <Spinner/> {phaseLabel[phase]}...
+                      </div>
+                    )}
+                    {phase==="complete"&&(
+                      <div style={{display:"flex",gap:8}}>
+                        <Btn variant="outline" small onClick={()=>{setPhase("idle");setLiveLog([]);setMappings([]);setAiRec("");setApplyStep(-1);setAppliedMap([]);setVerifyResult(null);}}>↺ New Analysis</Btn>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                  {[
+                    {l:"Inbound",v:selected.inbound||"/api/incoming"},
+                    {l:"Outbound",v:selected.outbound||"/api/outgoing"},
+                    {l:"Webhook",v:selected.webhook||"—"},
+                    {l:"Role",v:selected.role||selected.type},
+                  ].map((s,i)=>(
+                    <div key={i} style={{padding:"7px 10px",background:C.bg,borderRadius:7}}>
+                      <div style={{fontSize:10,color:C.muted,marginBottom:2}}>{s.l}</div>
+                      <div style={{fontSize:11,fontFamily:"IBM Plex Mono",color:C.navy,fontWeight:600,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.v}</div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              {/* 3-panel: Vendor schema | Agent log + arrows | BT schema */}
+              {(liveLog.length>0||mappings.length>0)&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,flexShrink:0}}>
+
+                  {/* Vendor schema */}
+                  <Card style={{padding:0,overflow:"hidden"}}>
+                    <div style={{padding:"10px 14px",background:typeColor[selected.type]||C.blue,
+                      display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>{selected.name}</div>
+                        <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontFamily:"IBM Plex Mono"}}>
+                          {selected.inbound}
+                        </div>
+                      </div>
+                      <Badge color="#fff"><span style={{color:typeColor[selected.type]||C.blue}}>Vendor</span></Badge>
+                    </div>
+                    <div style={{background:"#0F172A",padding:"12px 14px",overflowY:"auto",maxHeight:280}}>
+                      {selected.schema&&selected.schema!=="{}"?(
+                        <pre style={{margin:0,fontSize:10,fontFamily:"IBM Plex Mono",color:"#94A3B8",lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                          {JSON.stringify(JSON.parse(selected.schema),null,2)}
+                        </pre>
+                      ):(
+                        <div style={{color:"rgba(255,255,255,0.3)",fontSize:12,padding:"20px 0",textAlign:"center"}}>
+                          No schema provided<br/>
+                          <span style={{fontSize:10}}>Vendor did not include schema sample</span>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+
+                  {/* Agent log + mapping arrows */}
+                  <Card style={{padding:0,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+                    <div style={{padding:"10px 14px",background:C.navy,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+                      <span style={{fontSize:12,fontWeight:700,color:"#fff"}}>🧠 Agent Log</span>
+                      <div style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:C.accent,fontWeight:600}}>
+                        {!["idle","complete"].includes(phase)&&<span style={{width:5,height:5,borderRadius:"50%",background:C.accent,animation:"pulse 1s infinite",display:"inline-block"}}/>}
+                        {phaseLabel[phase]}
+                      </div>
+                    </div>
+                    <div ref={logRef} style={{background:"#0F172A",padding:"8px 12px",maxHeight:130,overflowY:"auto",flexShrink:0}}>
+                      {liveLog.map((l,i)=>(
+                        <div key={i} style={{display:"flex",gap:6,marginBottom:4,animation:"fadeUp .2s ease-out"}}>
+                          <span style={{fontSize:12,flexShrink:0}}>{l.icon}</span>
+                          <span style={{fontSize:10,fontFamily:"IBM Plex Mono",color:l.color,lineHeight:1.5}}>{l.msg}</span>
+                        </div>
+                      ))}
+                      {!["idle","recommended","complete"].includes(phase)&&(
+                        <div style={{display:"flex",gap:3,padding:"4px 0"}}>
+                          {[0,1,2].map(j=><div key={j} style={{width:4,height:4,borderRadius:"50%",background:C.accent,animation:`pulse 1s ease-in-out ${j*.2}s infinite`}}/>)}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{flex:1,overflowY:"auto",padding:"8px 10px",background:C.surface}}>
+                      <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>
+                        Field Mapping
+                      </div>
+                      {mappings.map((m,i)=>{
+                        const isApplied=appliedMap.includes(i);
+                        const isActive=mappings.length>i;
+                        return(
+                          <div key={i} style={{display:"flex",alignItems:"center",gap:4,marginBottom:3,
+                            opacity:isActive?1:0.3,transition:"opacity .3s",animation:isActive?"fadeUp .2s ease-out":"none"}}>
+                            <div style={{fontSize:9,fontFamily:"IBM Plex Mono",color:isApplied?C.success:m.color,
+                              background:`${isApplied?C.success:m.color}12`,padding:"2px 5px",borderRadius:3,
+                              whiteSpace:"nowrap",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",flexShrink:0}}>
+                              {m.from.split(".").pop()}
+                            </div>
+                            <div style={{flex:1,height:1.5,background:isApplied?C.success:m.color,position:"relative",minWidth:10}}>
+                              <div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(-50%,-50%)",
+                                background:isApplied?C.success:m.color,color:"#fff",fontSize:8,padding:"1px 4px",
+                                borderRadius:8,whiteSpace:"nowrap",fontWeight:600}}>
+                                {isApplied?"✓":m.label}
+                              </div>
+                            </div>
+                            <div style={{fontSize:9,fontFamily:"IBM Plex Mono",color:isApplied?C.success:C.text,
+                              background:isApplied?`${C.success}12`:C.bg,padding:"2px 5px",borderRadius:3,
+                              whiteSpace:"nowrap",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",flexShrink:0}}>
+                              {m.to.split(".").pop()}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Card>
+
+                  {/* BridgeTech target schema */}
+                  <Card style={{padding:0,overflow:"hidden"}}>
+                    <div style={{padding:"10px 14px",background:`linear-gradient(135deg,${C.navy},${C.primary})`,
+                      display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>BridgeTech Universal API</div>
+                        <div style={{fontSize:10,color:"rgba(255,255,255,0.7)",fontFamily:"IBM Plex Mono"}}>POST /api/incoming</div>
+                      </div>
+                      <Badge color={C.accent}>Target</Badge>
+                    </div>
+                    <div style={{background:"#0F172A",padding:"12px 14px",overflowY:"auto",maxHeight:280}}>
+                      <pre style={{margin:0,fontSize:10,fontFamily:"IBM Plex Mono",color:"#94A3B8",lineHeight:1.6}}>
+{`{
+  "order": {
+    "id": "UUID",
+    "portal_id": "string",
+    "created_at": "ISO8601",
+    "currency": "ISO4217",
+    "total_amount": "number",
+    "status": "pending|approved|rejected",
+    "line_items": [{
+      "line_number": "integer",
+      "sku": "string",
+      "quantity": "integer",
+      "unit_price": "number",
+      "description": "string"
+    }],
+    "shipping": {
+      "address": "string",
+      "city": "string",
+      "postal_code": "string",
+      "country_code": "ISO2"
+    }
+  }
+}`}
+                      </pre>
+                    </div>
+                  </Card>
+                </div>
+              )}
+
+              {/* AI Recommendation */}
+              {(aiLoading||aiRec)&&(
+                <Card style={{padding:0,overflow:"hidden",flexShrink:0}}>
+                  <div style={{padding:"12px 18px",borderBottom:`1px solid ${C.border}`,
+                    background:C.primaryDim,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <h3 style={{fontSize:13,fontWeight:700,color:C.navy}}>🧠 AI Bridge Recommendation</h3>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      {aiLoading&&<div style={{display:"flex",gap:3}}>
+                        {[0,1,2].map(j=><div key={j} style={{width:5,height:5,borderRadius:"50%",background:C.primary,animation:`pulse 1s ease-in-out ${j*.2}s infinite`}}/>)}
+                      </div>}
+                      {!aiLoading&&aiRec&&(
+                        <>
+                          <Badge color={C.success}>✓ Recommendation Ready</Badge>
+                          {phase==="recommended"&&(
+                            <Btn variant="accent" onClick={applyChanges}>⚡ Apply AI Changes</Btn>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{padding:"16px 20px",maxHeight:280,overflowY:"auto"}}>
+                    {aiLoading&&<div style={{color:C.muted,fontSize:13,padding:"20px 0",textAlign:"center"}}>
+                      AI Agent is generating bridge strategy...
+                    </div>}
+                    {aiRec&&<RichMessage text={aiRec} isUser={false}/>}
+                  </div>
+                </Card>
+              )}
+
+              {/* APPLY PROGRESS */}
+              {["applying","verifying"].includes(phase)&&(
+                <Card style={{padding:"16px 20px",border:`1.5px solid ${C.accent}40`,flexShrink:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <h3 style={{fontSize:13,fontWeight:700,color:C.navy}}>
+                      {phase==="applying"?"⚙️ Applying AI Changes...":"🔍 Re-verifying Schema..."}
+                    </h3>
+                    <Badge color={phase==="applying"?C.accent:C.warn}>
+                      {phase==="applying"?`${appliedMap.length}/${mappings.length} applied`:"Verifying..."}
+                    </Badge>
+                  </div>
+                  <div style={{height:8,background:C.bg,borderRadius:4,overflow:"hidden",marginBottom:10}}>
+                    <div style={{height:"100%",borderRadius:4,
+                      background:phase==="verifying"?C.warn:C.accent,
+                      width:phase==="verifying"?"100%":`${(appliedMap.length/Math.max(1,mappings.length))*100}%`,
+                      transition:"width .3s"}}/>
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {mappings.map((m,i)=>(
+                      <div key={i} style={{padding:"3px 8px",borderRadius:12,fontSize:10,fontWeight:600,
+                        background:appliedMap.includes(i)?C.success+"15":C.bg,
+                        color:appliedMap.includes(i)?C.success:C.muted,
+                        border:`1px solid ${appliedMap.includes(i)?C.success+"40":C.border}`,
+                        transition:"all .2s"}}>
+                        {appliedMap.includes(i)?"✓ ":""}{m.from.split(".").pop()} → {m.to.split(".").pop()}
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              {/* MAPPING COMPLETE */}
+              {phase==="complete"&&verifyResult&&(
+                <Card style={{padding:"22px 28px",background:`linear-gradient(135deg,${C.success}08,${C.accent}08)`,
+                  border:`2px solid ${C.success}50`,animation:"fadeUp .4s ease-out",flexShrink:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:18}}>
+                    <div style={{width:56,height:56,borderRadius:16,background:C.success+"18",
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>🎉</div>
+                    <div>
+                      <div style={{fontSize:18,fontWeight:800,color:C.success,marginBottom:4}}>
+                        ✓ Mapping Completed — Bridge Active
+                      </div>
+                      <div style={{fontSize:13,color:C.muted}}>
+                        <strong style={{color:C.navy}}>{selected.name}</strong> is now connected to BridgeTech Universal API. All field transformations are live.
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
+                    {[
+                      {l:"Total Mappings",v:verifyResult.matched,c:C.primary},
+                      {l:"Direct Match",v:verifyResult.direct,c:C.success},
+                      {l:"Transforms",v:verifyResult.transformed,c:C.accent},
+                      {l:"Renames",v:verifyResult.renamed,c:C.blue},
+                    ].map((s,i)=>(
+                      <div key={i} style={{textAlign:"center",padding:"10px",background:C.surface,borderRadius:10,
+                        border:`1px solid ${s.c}25`}}>
+                        <div style={{fontSize:22,fontWeight:800,color:s.c,fontFamily:"IBM Plex Mono"}}>{s.v}</div>
+                        <div style={{fontSize:10,color:C.muted,marginTop:2}}>{s.l}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
+                    background:C.surface,borderRadius:10,border:`1px solid ${C.border}`}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",background:C.success,
+                      boxShadow:`0 0 0 3px ${C.success}30`,display:"inline-block",flexShrink:0}}/>
+                    <div style={{fontSize:12,color:C.text}}>
+                      Portal <strong>{selected.name}</strong> moved to <strong style={{color:C.success}}>Bridged Portals</strong>.
+                      The vendor will see status updated to <strong>Active</strong> in their portal dashboard.
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── APP SHELL ──────────────────────────────────────────────
+function App(){
+  const [role,setRole]=useState(null);
+  const [page,setPage]=useState("dashboard");
+  const [apiKey,setApiKey]=useState(()=>sessionStorage.getItem("bt_api_key")||"");
+  const [customerId,setCustomerId]=useState("MRR-001");
+
+  useEffect(()=>{
+    window.__BT_API_KEY=apiKey;
+    if(apiKey)sessionStorage.setItem("bt_api_key",apiKey);
+  },[apiKey]);
+
+  function handleLogin(r){
+    setRole(r);
+    // Set default customer ID by role
+    if(r==="B2B Buyer") setCustomerId("MRR-001");
+    if(r==="Dealer") setCustomerId("HDT-007");
+    setPage("dashboard");
+  }
+
+  if(!role) return <Login onLogin={handleLogin}/>;
+
+  function renderPage(){
+    switch(page){
+      case"dashboard":      return <Dashboard role={role} onNavigate={setPage} customerId={customerId}/>;
+      case"catalog":        return <CatalogModule role={role} customerId={customerId}/>;
+      case"customers":      return <CustomerRegistry/>;
+      case"api-monitor":    return <APIMonitor/>;
+      case"order-listener": return <OrderListener/>;
+      case"ai-routing":     return <AIRoutingMonitor/>;
+      case"oms-registry":   return <OMSRegistry/>;
+      case"schema-bridge":  return <SchemaBridge/>;
+      case"support":        return <SupportAgent/>;
+      case"churn":          return <ChurnAgent/>;
+      case"intent":         return <IntentMonitor/>;
+      case"api-setup":      return <APIServiceSetup role={role} customerId={customerId}/>;
+      case"track":          return <OrderTracking customerId={customerId}/>;
+      case"orders":         return <OrderTracking customerId={customerId}/>;
+      case"replenishment":  return <OrderTracking customerId={customerId}/>;
+      case"catalog-sync":   return <CatalogModule role={role} customerId={customerId}/>;
+      case"marketplace-orders": return <OrderListener/>;
+      default:              return <Dashboard role={role} onNavigate={setPage} customerId={customerId}/>;
+    }
+  }
+
+  const pageName = page.replace(/-/g," ").replace(/\w/g,c=>c.toUpperCase());
+
+  return(
+    <div style={{display:"flex",height:"100vh",overflow:"hidden"}}>
+      <Sidebar active={page} setActive={setPage} role={role} onLogout={()=>{setRole(null);setPage("dashboard");}}/>
+      <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        {/* Topbar */}
+        <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 26px",
+          display:"flex",alignItems:"center",justifyContent:"space-between",height:54,flexShrink:0,
+          boxShadow:"0 1px 0 rgba(0,0,0,0.04)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <span style={{fontSize:12,color:C.muted}}>BridgeTech</span>
+            <span style={{fontSize:12,color:C.border}}>›</span>
+            <span style={{fontSize:12,fontWeight:600,color:C.navy}}>{pageName}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,
+            border:`1.5px solid ${apiKey?C.success+"60":C.warn+"80"}`,borderRadius:10,
+            padding:"5px 12px",background:apiKey?"rgba(34,197,94,0.04)":"rgba(245,158,11,0.04)",
+            flex:"0 0 auto",minWidth:380}}>
+            <span style={{fontSize:14}}>{apiKey?"🔑":"⚠️"}</span>
+            <input value={apiKey} onChange={e=>setApiKey(e.target.value)}
+              placeholder="Paste your Access Code to Enable AI Features"
+              type="password"
+              style={{border:"none",background:"transparent",fontSize:12,color:C.text,
+                outline:"none",fontFamily:"var(--font)",flex:1,minWidth:0}}/>
+            {apiKey&&<span style={{fontSize:10.5,color:C.success,fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}}>✓ AI Ready</span>}
+            {!apiKey&&<span style={{fontSize:10.5,color:C.warn,fontWeight:500,flexShrink:0}}>Required for AI</span>}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:14,flexShrink:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:C.success,display:"inline-block"}}/>
+              <span style={{fontSize:11.5,color:C.muted}}>Orchestration Hub</span>
+              <span style={{fontSize:11,color:C.success,fontWeight:600}}>Connected</span>
+            </div>
+            <div style={{width:1,height:18,background:C.border}}/>
+            <div style={{display:"flex",alignItems:"center",gap:7,padding:"4px 11px",
+              background:C.primaryDim,borderRadius:7,border:`1px solid ${C.primary}20`}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:C.primary,display:"flex",
+                alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:"#fff"}}>
+                {role[0]}
+              </div>
+              <span style={{fontSize:12,fontWeight:600,color:C.primary}}>{role}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{flex:1,overflow:"auto"}}><ErrorBoundary key={page}>{renderPage()}</ErrorBoundary></div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
